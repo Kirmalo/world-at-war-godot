@@ -128,6 +128,7 @@ var _fog_tex:  ImageTexture   = null
 
 # Material cache
 var _mats: Dictionary = {}
+var _water_mat: ShaderMaterial = null
 
 # RNG seeded per-map
 var _rng := RandomNumberGenerator.new()
@@ -187,23 +188,67 @@ func _build_world() -> void:
 	_setup_environment()
 
 func _setup_environment() -> void:
+	# Primary sun — warm afternoon angle, casts hard shadows
+	var sun := DirectionalLight3D.new()
+	sun.light_color   = Color(1.00, 0.92, 0.76)
+	sun.light_energy  = 2.2
+	sun.shadow_enabled = true
+	sun.directional_shadow_mode         = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	sun.directional_shadow_max_distance = 80.0
+	sun.shadow_bias = 0.02
+	sun.rotation_degrees = Vector3(-50.0, -32.0, 0.0)
+	add_child(sun)
+
+	# Cool sky fill — softens shadow side, adds depth
+	var fill := DirectionalLight3D.new()
+	fill.light_color  = Color(0.40, 0.56, 0.82)
+	fill.light_energy = 0.32
+	fill.shadow_enabled = false
+	fill.rotation_degrees = Vector3(-18.0, 148.0, 0.0)
+	add_child(fill)
+
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color       = Color(0.18, 0.30, 0.56)
-	sky_mat.sky_horizon_color   = Color(0.52, 0.60, 0.70)
-	sky_mat.ground_bottom_color   = Color(0.07, 0.09, 0.07)
-	sky_mat.ground_horizon_color  = Color(0.32, 0.36, 0.28)
-	sky_mat.sun_angle_max = 2.0
-	var sky := Sky.new(); sky.sky_material = sky_mat
+	sky_mat.sky_top_color        = Color(0.12, 0.24, 0.52)
+	sky_mat.sky_horizon_color    = Color(0.56, 0.66, 0.78)
+	sky_mat.ground_bottom_color  = Color(0.06, 0.08, 0.06)
+	sky_mat.ground_horizon_color = Color(0.30, 0.34, 0.26)
+	sky_mat.sun_angle_max = 2.5
+	var sky := Sky.new()
+	sky.sky_material = sky_mat
+
 	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.75
-	env.fog_enabled = true
-	env.fog_light_color = Color(0.52, 0.56, 0.54)
-	env.fog_density = 0.007
-	env.fog_aerial_perspective = 0.3
-	env.glow_enabled = false
+	env.background_mode       = Environment.BG_SKY
+	env.sky                   = sky
+	env.ambient_light_source  = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy  = 0.55
+
+	env.tonemap_mode     = Environment.TONE_MAPPER_FILMIC
+	env.tonemap_exposure = 1.0
+	env.tonemap_white    = 6.0
+
+	env.ssao_enabled   = true
+	env.ssao_radius    = 1.2
+	env.ssao_intensity = 2.2
+	env.ssao_power     = 1.5
+	env.ssao_sharpness = 0.98
+
+	env.ssil_enabled   = true
+	env.ssil_radius    = 5.0
+	env.ssil_intensity = 0.8
+
+	env.glow_enabled       = true
+	env.glow_normalized    = false
+	env.glow_intensity     = 0.4
+	env.glow_bloom         = 0.04
+	env.glow_blend_mode    = Environment.GLOW_BLEND_MODE_SOFTLIGHT
+	env.glow_hdr_threshold = 0.9
+	env.glow_hdr_scale     = 2.0
+
+	env.fog_enabled           = true
+	env.fog_light_color       = Color(0.54, 0.58, 0.60)
+	env.fog_density           = 0.003
+	env.fog_aerial_perspective = 0.2
+
 	var we := $WorldEnvironment as WorldEnvironment
 	if we: we.environment = env
 
@@ -298,13 +343,13 @@ func _build_osm_buildings() -> void:
 	var all_verts   := PackedVector3Array()
 	var all_normals := PackedVector3Array()
 	var all_colors  := PackedColorArray()
+	var all_uvs     := PackedVector2Array()
 	var all_idx     := PackedInt32Array()
 
 	for bld in (blds as Array):
 		var geom: Array = bld.get("geom", [])
 		if geom.size() < 3: continue
 
-		# Convert lat/lon footprint to world XZ
 		var pts: Array = []
 		for pt in geom:
 			var lat := float(pt.get("lat", 0.0))
@@ -312,12 +357,10 @@ func _build_osm_buildings() -> void:
 			var dy  := (lat - clat) * 111000.0
 			var dx  := (lon - clon) * 111000.0 * cos_lat
 			pts.append(Vector2(dx * scale, -dy * scale))
-		# OSM closed ways repeat the first vertex — remove it
-		if pts.size() >= 2 and pts[0].distance_to(pts[-1]) < 0.05:
+		if pts.size() >= 2 and (pts[0] as Vector2).distance_to(pts[-1] as Vector2) < 0.05:
 			pts.resize(pts.size() - 1)
 		if pts.size() < 3: continue
 
-		# Height from tags, levels, or building type
 		var btype: String = str(bld.get("type", "yes"))
 		var h_real: float = float(bld.get("height", 0.0))
 		var h: float
@@ -343,42 +386,43 @@ func _build_osm_buildings() -> void:
 				h = float(floors) * 3.0 * scale
 		h = clampf(h, 0.3, 25.0)
 
-		# Wall and roof color from building type
+		# Wall color encodes building type for the shader:
+		# warm (R > B) → brick   cool (B > R) → glass   neutral → concrete
 		var wall_col: Color
 		var roof_col: Color
 		match btype:
 			"house","detached","semidetached_house","terrace","bungalow","residential":
-				wall_col = Color(0.72, 0.62, 0.52); roof_col = Color(0.38, 0.20, 0.16)
+				wall_col = Color(0.72, 0.58, 0.46); roof_col = Color(0.36, 0.18, 0.14)
 			"apartments","block_of_flats":
-				wall_col = Color(0.65, 0.60, 0.58); roof_col = Color(0.28, 0.26, 0.24)
+				wall_col = Color(0.64, 0.60, 0.57); roof_col = Color(0.26, 0.24, 0.22)
 			"office","commercial","bank","hotel":
-				wall_col = Color(0.54, 0.62, 0.68); roof_col = Color(0.24, 0.30, 0.34)
+				wall_col = Color(0.48, 0.58, 0.70); roof_col = Color(0.22, 0.28, 0.36)
 			"retail","shop","supermarket":
-				wall_col = Color(0.70, 0.60, 0.50); roof_col = Color(0.33, 0.26, 0.20)
+				wall_col = Color(0.68, 0.58, 0.48); roof_col = Color(0.30, 0.24, 0.18)
 			"industrial","warehouse","shed","garage","garages":
-				wall_col = Color(0.55, 0.53, 0.50); roof_col = Color(0.32, 0.30, 0.28)
+				wall_col = Color(0.54, 0.52, 0.50); roof_col = Color(0.30, 0.28, 0.26)
 			"church","cathedral","chapel","mosque","synagogue":
-				wall_col = Color(0.82, 0.78, 0.70); roof_col = Color(0.48, 0.46, 0.42)
+				wall_col = Color(0.80, 0.76, 0.68); roof_col = Color(0.46, 0.44, 0.40)
 			_:
-				wall_col = Color(0.68, 0.64, 0.60); roof_col = Color(0.30, 0.28, 0.26)
-		# Per-building tint so buildings don't all look identical
+				wall_col = Color(0.66, 0.63, 0.60); roof_col = Color(0.28, 0.26, 0.24)
 		var tint := Color(0.88 + _rng.randf()*0.24, 0.88 + _rng.randf()*0.24, 0.88 + _rng.randf()*0.24)
 		wall_col = Color(wall_col.r*tint.r, wall_col.g*tint.g, wall_col.b*tint.b)
 
-		# Centroid for outward wall normals
 		var centroid := Vector2.ZERO
 		for p: Vector2 in pts: centroid += p
 		centroid /= float(pts.size())
 
-		# Walls — one quad per polygon edge
 		var n := pts.size()
 		for i in n:
-			var j   := (i + 1) % n
-			var p0  := Vector3(pts[i].x, 0.02, pts[i].y)
-			var p1  := Vector3(pts[j].x, 0.02, pts[j].y)
-			var p0t := Vector3(pts[i].x, h,    pts[i].y)
-			var p1t := Vector3(pts[j].x, h,    pts[j].y)
-			var mid2d: Vector2 = ((pts[i] as Vector2) + (pts[j] as Vector2)) * 0.5
+			var j    := (i + 1) % n
+			var pi   := pts[i] as Vector2
+			var pj   := pts[j] as Vector2
+			var elen := pi.distance_to(pj)
+			var p0   := Vector3(pi.x, 0.02, pi.y)
+			var p1   := Vector3(pj.x, 0.02, pj.y)
+			var p0t  := Vector3(pi.x, h,    pi.y)
+			var p1t  := Vector3(pj.x, h,    pj.y)
+			var mid2d: Vector2 = (pi + pj) * 0.5
 			var out2d: Vector2 = mid2d - centroid
 			var norm: Vector3
 			if out2d.length_squared() > 0.00001:
@@ -390,14 +434,17 @@ func _build_osm_buildings() -> void:
 			all_verts.append_array([p0, p1, p0t, p1t])
 			all_normals.append_array([norm, norm, norm, norm])
 			all_colors.append_array([wall_col, wall_col, wall_col, wall_col])
+			all_uvs.append_array([Vector2(0.0, 0.0), Vector2(elen, 0.0),
+				Vector2(0.0, h), Vector2(elen, h)])
 			all_idx.append_array([b, b+2, b+1, b+1, b+2, b+3])
 
-		# Roof — fan triangulation from vertex 0
 		var rb := all_verts.size()
 		for i in pts.size():
-			all_verts.append(Vector3(pts[i].x, h, pts[i].y))
+			var pi := pts[i] as Vector2
+			all_verts.append(Vector3(pi.x, h, pi.y))
 			all_normals.append(Vector3.UP)
 			all_colors.append(roof_col)
+			all_uvs.append(Vector2(pi.x, pi.y))
 		for i in range(1, pts.size() - 1):
 			all_idx.append_array([rb, rb + i, rb + i + 1])
 
@@ -405,15 +452,17 @@ func _build_osm_buildings() -> void:
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = all_verts
-	arrays[Mesh.ARRAY_NORMAL] = all_normals
-	arrays[Mesh.ARRAY_COLOR]  = all_colors
-	arrays[Mesh.ARRAY_INDEX]  = all_idx
+	arrays[Mesh.ARRAY_VERTEX]  = all_verts
+	arrays[Mesh.ARRAY_NORMAL]  = all_normals
+	arrays[Mesh.ARRAY_COLOR]   = all_colors
+	arrays[Mesh.ARRAY_TEX_UV]  = all_uvs
+	arrays[Mesh.ARRAY_INDEX]   = all_idx
 	var am := ArrayMesh.new()
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var bshader := Shader.new()
+	bshader.code = _bld_shader_code()
+	var mat := ShaderMaterial.new()
+	mat.shader = bshader
 	var mi := MeshInstance3D.new()
 	mi.mesh = am
 	mi.set_surface_override_material(0, mat)
@@ -564,10 +613,19 @@ func _place_tree(px: float, pz: float) -> void:
 			add_child(crown)
 
 func _place_water(px: float, pz: float) -> void:
-	var mat := _mat_new(Color(0.10,0.28,0.48,0.82))
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	var m := _box(Vector3(TCELL,0.06,TCELL), mat)
-	m.position = Vector3(px, 0.03, pz)
+	if _water_mat == null:
+		var s := Shader.new()
+		s.code = _water_shader_code()
+		_water_mat = ShaderMaterial.new()
+		_water_mat.shader = s
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(TCELL, TCELL)
+	pm.subdivide_width = 4
+	pm.subdivide_depth = 4
+	var m := MeshInstance3D.new()
+	m.mesh = pm
+	m.set_surface_override_material(0, _water_mat)
+	m.position = Vector3(px, 0.04, pz)
 	add_child(m)
 
 func _place_street_light(px: float, pz: float) -> void:
@@ -2141,6 +2199,82 @@ func _mat(color: Color) -> StandardMaterial3D:
 
 func _mat_new(color: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new(); m.albedo_color = color; return m
+
+func _bld_shader_code() -> String:
+	return """
+shader_type spatial;
+render_mode cull_disabled;
+
+void fragment() {
+	float warmth = COLOR.r - COLOR.b;
+
+	// Brick — warm buildings (houses, residential)
+	vec2 b_uv   = UV / vec2(0.48, 0.26);
+	float b_row = floor(b_uv.y);
+	float b_off = mod(b_row, 2.0) * 0.5;
+	vec2 b_cell = vec2(fract(b_uv.x + b_off), fract(b_uv.y));
+	float mortar = max(step(0.91, b_cell.x), step(0.88, b_cell.y));
+	float brnd   = fract(sin(dot(floor(vec2(b_uv.x + b_off, b_uv.y)),
+		vec2(127.1, 311.7))) * 43758.5453);
+	vec3 brick_col = mix(COLOR.rgb * (0.92 + brnd * 0.16),
+		COLOR.rgb * 0.50, mortar);
+
+	// Glass curtain wall — cool buildings (offices, commercial)
+	vec2 g_uv   = UV / vec2(0.42, 0.36);
+	vec2 g_cell = fract(g_uv);
+	float frame = max(max(step(g_cell.x, 0.07), step(0.93, g_cell.x)),
+		max(step(g_cell.y, 0.09), step(0.91, g_cell.y)));
+	float grnd  = fract(sin(dot(floor(g_uv),
+		vec2(127.1, 311.7))) * 43758.5453);
+	vec3 glass_col = mix(vec3(0.18, 0.28, 0.46) * (0.75 + grnd * 0.50),
+		COLOR.rgb, frame);
+	float g_rough = mix(0.03, 0.80, frame);
+	float g_metal = mix(0.55, 0.0, frame);
+
+	// Concrete panels — neutral buildings (apartments, industrial)
+	vec2 c_uv    = UV / vec2(0.55, 0.40);
+	float cnoise = fract(sin(dot(floor(c_uv),
+		vec2(127.1, 311.7))) * 43758.5453);
+	float c_seam = max(step(0.96, fract(c_uv.y)), step(0.97, fract(c_uv.x)));
+	vec3 conc_col = COLOR.rgb * (0.88 + cnoise * 0.20) - vec3(c_seam * 0.12);
+
+	float bw = clamp(warmth * 4.0, 0.0, 1.0);
+	float gw = clamp(-warmth * 4.0, 0.0, 1.0);
+	float cw = 1.0 - bw - gw;
+
+	ALBEDO    = brick_col * bw + glass_col * gw + conc_col * cw;
+	ROUGHNESS = (0.88 * bw) + (g_rough * gw) + (0.92 * cw);
+	METALLIC  = g_metal * gw;
+	SPECULAR  = 0.5;
+	EMISSION  = vec3(0.18, 0.28, 0.44) * (1.0 - frame) * gw * 0.25;
+}
+"""
+
+func _water_shader_code() -> String:
+	return """
+shader_type spatial;
+render_mode blend_mix, depth_draw_disabled, cull_back;
+
+void fragment() {
+	vec2 uv1 = UV * 3.0 + vec2(TIME * 0.04, TIME * 0.02);
+	vec2 uv2 = UV * 3.0 + vec2(-TIME * 0.03, TIME * 0.05);
+	float w1 = sin(uv1.x * 6.28318 + uv1.y * 4.18879) * 0.5 + 0.5;
+	float w2 = sin(uv2.x * 3.14159 - uv2.y * 6.28318) * 0.5 + 0.5;
+	float wave = (w1 + w2) * 0.5;
+	ALBEDO    = mix(vec3(0.05, 0.16, 0.34), vec3(0.10, 0.28, 0.52), wave);
+	ROUGHNESS = 0.05 + wave * 0.04;
+	METALLIC  = 0.0;
+	SPECULAR  = 0.9;
+	ALPHA     = 0.88;
+	vec3 wnorm = normalize(vec3(
+		sin(uv1.x * 6.28318) * 0.12,
+		cos(uv2.y * 4.71239) * 0.12,
+		1.0
+	));
+	NORMAL_MAP       = wnorm * 0.5 + 0.5;
+	NORMAL_MAP_DEPTH = 0.5;
+}
+"""
 
 func _box(size: Vector3, mat: Material) -> MeshInstance3D:
 	var bm := BoxMesh.new(); bm.size = size
