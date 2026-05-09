@@ -374,10 +374,10 @@ func _build_osm_buildings() -> void:
 		var n := pts.size()
 		for i in n:
 			var j   := (i + 1) % n
-			var p0  := Vector3(pts[i].x, 0.0, pts[i].y)
-			var p1  := Vector3(pts[j].x, 0.0, pts[j].y)
-			var p0t := Vector3(pts[i].x, h,   pts[i].y)
-			var p1t := Vector3(pts[j].x, h,   pts[j].y)
+			var p0  := Vector3(pts[i].x, 0.02, pts[i].y)
+			var p1  := Vector3(pts[j].x, 0.02, pts[j].y)
+			var p0t := Vector3(pts[i].x, h,    pts[i].y)
+			var p1t := Vector3(pts[j].x, h,    pts[j].y)
 			var mid2d: Vector2 = ((pts[i] as Vector2) + (pts[j] as Vector2)) * 0.5
 			var out2d: Vector2 = mid2d - centroid
 			var norm: Vector3
@@ -1029,11 +1029,8 @@ func _update_units(delta: float) -> void:
 func _death_effect(unit: Unit) -> void:
 	Sounds.play("death", -8.0)
 	unit.set_selected(false)
-	unit.modulate = Color(1.6, 0.28, 0.12)
-	# Squish inward then collapse
-	var tw := create_tween().set_parallel(true).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	var tw := create_tween().set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
 	tw.tween_property(unit, "scale", Vector3(0.0, 0.0, 0.0), 0.26)
-	tw.tween_property(unit, "modulate:a", 0.0, 0.22)
 	await tw.finished
 	if is_instance_valid(unit): unit.queue_free()
 	# Attrition defeat: waves started, no player units, can't afford cheapest
