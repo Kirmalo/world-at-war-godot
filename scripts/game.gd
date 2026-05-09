@@ -118,6 +118,14 @@ var _mm_dots:     Dictionary  = {}
 # Capture points
 var capture_points: Array = []
 
+# Fog of war
+const VISION_R      := 5   # default vision radius in tmap tiles
+const VISION_R_SNIP := 9   # sniper vision
+var fog:      Array          = []
+var _fog_mesh: MeshInstance3D = null
+var _fog_img:  Image          = null
+var _fog_tex:  ImageTexture   = null
+
 # Material cache
 var _mats: Dictionary = {}
 
@@ -132,6 +140,7 @@ func _ready() -> void:
 	_build_pause_menu()
 	_build_marquee()
 	_build_minimap()
+	_init_fog()
 	game_active = true
 	_set_status("DEFEND THE NEIGHBORHOOD  |  TAP TO SELECT  |  RIGHT-CLICK TO COMMAND")
 
@@ -728,6 +737,7 @@ func _process(delta: float) -> void:
 	if not game_active or game_paused: return
 	_update_wave(delta)
 	_update_units(delta)
+	_update_fog()
 	_update_capture_points(delta)
 	_update_hud()
 
@@ -741,6 +751,19 @@ func _update_wave(delta: float) -> void:
 		if enemies_left.is_empty():
 			_show_endgame(true)
 
+func _find_road_near(wx: float, wz: float, max_r: int = 5) -> Vector3:
+	var col0 := clampi(int((wx + HALF) / TCELL), 0, TG - 1)
+	var row0 := clampi(int((wz + HALF) / TCELL), 0, TG - 1)
+	for radius in range(0, max_r + 1):
+		for dr in range(-radius, radius + 1):
+			for dc in range(-radius, radius + 1):
+				if radius > 0 and abs(dr) != radius and abs(dc) != radius: continue
+				var r := row0 + dr; var c := col0 + dc
+				if r < 0 or r >= TG or c < 0 or c >= TG: continue
+				if tmap[r][c] == TILE_ROAD:
+					return Vector3(_tx(c), 0.0, _tz(r))
+	return Vector3(wx, 0.0, wz)
+
 func _launch_wave() -> void:
 	var kinds: Array = WAVE_DEFS[wave_num]
 	wave_num += 1
@@ -748,9 +771,10 @@ func _launch_wave() -> void:
 	_set_status("ENEMY ADVANCE — WAVE %d INCOMING!" % wave_num)
 	_flash_wave_banner(wave_num)
 	for k in kinds:
-		var px: float = -HQ_X + (_rng.randf()-0.5)*10.0
-		var pz: float = -HQ_Z + (_rng.randf()-0.5)*10.0
-		spawn_unit(str(k), "enemy", px, pz)
+		var raw_x: float = -HQ_X + (_rng.randf()-0.5)*10.0
+		var raw_z: float = -HQ_Z + (_rng.randf()-0.5)*10.0
+		var sp := _find_road_near(raw_x, raw_z)
+		spawn_unit(str(k), "enemy", sp.x, sp.z)
 
 func _update_units(delta: float) -> void:
 	var dead: Array = []
@@ -910,7 +934,11 @@ func _find_path(from_world: Vector3, to_world: Vector3) -> Array:
 			var nk: int = nnr*TG+nnc
 			if closed.has(nk): continue
 			var diagonal: bool = int(off[0]) != 0 and int(off[1]) != 0
-			var ng: float = float(g_cost.get(key, 0.0)) + (1.414 if diagonal else 1.0)
+			var step: float = 1.414 if diagonal else 1.0
+			match tmap[nnr][nnc]:
+				TILE_ROAD: step *= 0.5   # strongly prefer roads
+				TILE_TREE: step *= 1.4   # slow through vegetation
+			var ng: float = float(g_cost.get(key, 0.0)) + step
 			if not g_cost.has(nk) or ng < float(g_cost.get(nk, INF)):
 				g_cost[nk] = ng; par_map[nk] = key
 				open_set.append([ng + _heur(nnr,nnc,tr,tc), ng, nnr, nnc])
@@ -1170,6 +1198,78 @@ func _mm_w2s(world: Vector3) -> Vector2:
 
 func _mm_s2w(mm: Vector2) -> Vector3:
 	return Vector3(mm.x / MM_SIZE * HALF*2.0 - HALF, 0.0, mm.y / MM_SIZE * HALF*2.0 - HALF)
+
+func _init_fog() -> void:
+	fog = []
+	for _r in TG:
+		var row: Array = []; for _c in TG: row.append(0)
+		fog.append(row)
+	# Pre-reveal the player HQ area so they can see their start zone
+	var hq_col := clampi(int((HQ_X + HALF) / TCELL), 0, TG - 1)
+	var hq_row := clampi(int((HQ_Z + HALF) / TCELL), 0, TG - 1)
+	for dr in range(-4, 5):
+		for dc in range(-4, 5):
+			if dr*dr + dc*dc <= 20:
+				var r := hq_row + dr; var c := hq_col + dc
+				if r >= 0 and r < TG and c >= 0 and c < TG:
+					fog[r][c] = 1
+	# Build fog overlay mesh
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(HALF * 2.0 + 2.0, HALF * 2.0 + 2.0)
+	_fog_mesh = MeshInstance3D.new()
+	_fog_mesh.mesh = pm
+	_fog_mesh.position = Vector3(0.0, 0.5, 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.transparency      = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode      = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.depth_draw_mode   = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.render_priority   = 127
+	mat.texture_filter    = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	_fog_img = Image.create(TG, TG, false, Image.FORMAT_RGBA8)
+	_fog_tex = ImageTexture.create_from_image(_fog_img)
+	mat.albedo_texture = _fog_tex
+	_fog_mesh.set_surface_override_material(0, mat)
+	add_child(_fog_mesh)
+
+func _update_fog() -> void:
+	# Decay visible → seen
+	for r in TG:
+		for c in TG:
+			if fog[r][c] == 2: fog[r][c] = 1
+	# Reveal tiles in range of each living player unit
+	for u in units:
+		var unit := u as Unit
+		if unit == null or unit.hp <= 0 or unit.team != "player": continue
+		var vision: int = VISION_R_SNIP if unit.kind == "sniper" else VISION_R
+		var uc := clampi(int((unit.global_position.x + HALF) / TCELL), 0, TG - 1)
+		var ur := clampi(int((unit.global_position.z + HALF) / TCELL), 0, TG - 1)
+		for dr in range(-vision, vision + 1):
+			for dc in range(-vision, vision + 1):
+				if dr*dr + dc*dc > vision*vision: continue
+				var r := ur + dr; var c := uc + dc
+				if r >= 0 and r < TG and c >= 0 and c < TG:
+					fog[r][c] = 2
+	# Repaint fog texture
+	for r in TG:
+		for c in TG:
+			var a: float
+			match fog[r][c]:
+				0: a = 0.93
+				1: a = 0.55
+				_: a = 0.0
+			_fog_img.set_pixel(c, r, Color(0.0, 0.01, 0.04, a))
+	_fog_tex.update(_fog_img)
+	# Show/hide enemy units and their minimap dots
+	for u in units:
+		var unit := u as Unit
+		if unit == null or unit.team != "enemy": continue
+		var ec := clampi(int((unit.global_position.x + HALF) / TCELL), 0, TG - 1)
+		var er := clampi(int((unit.global_position.z + HALF) / TCELL), 0, TG - 1)
+		var in_sight: bool = fog[er][ec] == 2
+		unit.visible = in_sight
+		if _mm_dots.has(unit):
+			var dot := _mm_dots[unit] as ColorRect
+			if dot: dot.visible = in_sight
 
 func _nearest_enemy(u: Unit, max_r: float) -> Unit:
 	var best: Unit = null

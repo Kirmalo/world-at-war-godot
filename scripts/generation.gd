@@ -78,9 +78,17 @@ func _on_osm_done(result: int, code: int, _h: PackedStringArray, body: PackedByt
 	if hits < 4:
 		_fallback("SPARSE OSM DATA — PROCEDURAL MAP")
 		return
+	var road_n := 0; var bld_n := 0
+	for row in grid:
+		for cell in row:
+			if cell == "ROAD":     road_n += 1
+			elif cell == "BUILDING": bld_n += 1
+	if road_n == 0 and bld_n == 0:
+		_fallback("EMPTY OSM GRID — PROCEDURAL MAP")
+		return
 	_main().ai_tile_grid = grid
 	_main().using_ai_map = true
-	_set_status("BATTLEZONE MAPPED FROM REAL DATA — LAUNCHING")
+	_set_status("MAPPED: %d BUILDINGS · %d ROAD TILES — LAUNCHING" % [bld_n, road_n])
 	progress_bar.value = 100
 	_launch()
 
@@ -123,9 +131,9 @@ func _rasterize(elements: Array) -> Array:
 		if el.get("type") != "way": continue
 		var tags: Dictionary = el.get("tags", {})
 		var hw: String = tags.get("highway", "")
-		if hw == "" or hw in ["footway","path","cycleway","steps","track","bridleway","pedestrian"]:
+		if hw == "" or hw in ["footway","path","cycleway","steps","track","bridleway"]:
 			continue
-		var w := 2 if hw in ["motorway","trunk","primary","secondary"] else 1
+		var w := 2 if hw in ["motorway","trunk","primary","secondary","pedestrian"] else 1
 		var cells := _geom_to_cells(el.get("geometry", []))
 		for i in range(cells.size() - 1):
 			_draw_line(grid, cells[i].x, cells[i].y, cells[i+1].x, cells[i+1].y, "ROAD", w)
