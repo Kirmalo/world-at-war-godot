@@ -15,6 +15,7 @@ var ai_tile_grid:   Array  = []
 var using_ai_map:   bool   = false
 var sat_image_data: PackedByteArray = PackedByteArray()
 var osm_roads:      Array  = []
+var osm_buildings:  Array  = []
 
 func _ready() -> void:
 	_fade.color.a = 1.0   # Start fully black; _do_transition fades in

@@ -177,6 +177,7 @@ func _build_world() -> void:
 	if main.using_ai_map and main.ai_tile_grid.size() >= 10:
 		_build_from_grid(main.ai_tile_grid)
 		_build_osm_roads()
+		_build_osm_buildings()
 	else:
 		_build_procedural()
 
@@ -217,9 +218,8 @@ func _build_from_grid(grid: Array) -> void:
 			tmap[r][c] = tile
 			var px: float = _tx(c); var pz: float = _tz(r)
 			match tile:
-				TILE_BUILDING: _place_building(px, pz, r, c)
-				TILE_TREE:     _place_tree(px, pz)
-				TILE_WATER:    _place_water(px, pz)
+				TILE_TREE:  _place_tree(px, pz)
+				TILE_WATER: _place_water(px, pz)
 
 func _build_osm_roads() -> void:
 	var mn  := _main()
@@ -284,6 +284,140 @@ func _build_osm_roads() -> void:
 	var mi := MeshInstance3D.new()
 	mi.mesh = am
 	mi.set_surface_override_material(0, _mat(Color(0.16, 0.16, 0.16)))
+	add_child(mi)
+
+func _build_osm_buildings() -> void:
+	var mn   := _main()
+	var blds  = mn.get("osm_buildings")
+	if not blds is Array or (blds as Array).is_empty(): return
+	var clat    : float = mn.active_lat
+	var clon    : float = mn.active_lon
+	var cos_lat := cos(deg_to_rad(clat))
+	var scale   := HALF / 100.0
+
+	var all_verts   := PackedVector3Array()
+	var all_normals := PackedVector3Array()
+	var all_colors  := PackedColorArray()
+	var all_idx     := PackedInt32Array()
+
+	for bld in (blds as Array):
+		var geom: Array = bld.get("geom", [])
+		if geom.size() < 3: continue
+
+		# Convert lat/lon footprint to world XZ
+		var pts: Array = []
+		for pt in geom:
+			var lat := float(pt.get("lat", 0.0))
+			var lon := float(pt.get("lon", 0.0))
+			var dy  := (lat - clat) * 111000.0
+			var dx  := (lon - clon) * 111000.0 * cos_lat
+			pts.append(Vector2(dx * scale, -dy * scale))
+		# OSM closed ways repeat the first vertex — remove it
+		if pts.size() >= 2 and pts[0].distance_to(pts[-1]) < 0.05:
+			pts.resize(pts.size() - 1)
+		if pts.size() < 3: continue
+
+		# Height from tags, levels, or building type
+		var btype: String = str(bld.get("type", "yes"))
+		var h_real: float = float(bld.get("height", 0.0))
+		var h: float
+		if h_real > 0.5:
+			h = h_real * scale
+		else:
+			var lv: int = int(bld.get("levels", 0))
+			if lv > 0:
+				h = float(lv) * 3.0 * scale
+			else:
+				var floors: int
+				match btype:
+					"house","detached","semidetached_house","terrace","bungalow":
+						floors = 1 + _rng.randi() % 2
+					"apartments","residential","block_of_flats":
+						floors = 3 + _rng.randi() % 5
+					"office","commercial","bank","hotel":
+						floors = 3 + _rng.randi() % 8
+					"industrial","warehouse","shed","garage","garages":
+						floors = 1 + _rng.randi() % 2
+					_:
+						floors = 2 + _rng.randi() % 3
+				h = float(floors) * 3.0 * scale
+		h = clampf(h, 0.3, 25.0)
+
+		# Wall and roof color from building type
+		var wall_col: Color
+		var roof_col: Color
+		match btype:
+			"house","detached","semidetached_house","terrace","bungalow","residential":
+				wall_col = Color(0.72, 0.62, 0.52); roof_col = Color(0.38, 0.20, 0.16)
+			"apartments","block_of_flats":
+				wall_col = Color(0.65, 0.60, 0.58); roof_col = Color(0.28, 0.26, 0.24)
+			"office","commercial","bank","hotel":
+				wall_col = Color(0.54, 0.62, 0.68); roof_col = Color(0.24, 0.30, 0.34)
+			"retail","shop","supermarket":
+				wall_col = Color(0.70, 0.60, 0.50); roof_col = Color(0.33, 0.26, 0.20)
+			"industrial","warehouse","shed","garage","garages":
+				wall_col = Color(0.55, 0.53, 0.50); roof_col = Color(0.32, 0.30, 0.28)
+			"church","cathedral","chapel","mosque","synagogue":
+				wall_col = Color(0.82, 0.78, 0.70); roof_col = Color(0.48, 0.46, 0.42)
+			_:
+				wall_col = Color(0.68, 0.64, 0.60); roof_col = Color(0.30, 0.28, 0.26)
+		# Per-building tint so buildings don't all look identical
+		var tint := Color(0.88 + _rng.randf()*0.24, 0.88 + _rng.randf()*0.24, 0.88 + _rng.randf()*0.24)
+		wall_col = Color(wall_col.r*tint.r, wall_col.g*tint.g, wall_col.b*tint.b)
+
+		# Centroid for outward wall normals
+		var centroid := Vector2.ZERO
+		for p: Vector2 in pts: centroid += p
+		centroid /= float(pts.size())
+
+		# Walls — one quad per polygon edge
+		var n := pts.size()
+		for i in n:
+			var j   := (i + 1) % n
+			var p0  := Vector3(pts[i].x, 0.0, pts[i].y)
+			var p1  := Vector3(pts[j].x, 0.0, pts[j].y)
+			var p0t := Vector3(pts[i].x, h,   pts[i].y)
+			var p1t := Vector3(pts[j].x, h,   pts[j].y)
+			var mid2d: Vector2 = ((pts[i] as Vector2) + (pts[j] as Vector2)) * 0.5
+			var out2d: Vector2 = mid2d - centroid
+			var norm: Vector3
+			if out2d.length_squared() > 0.00001:
+				out2d = out2d.normalized()
+				norm = Vector3(out2d.x, 0.0, out2d.y)
+			else:
+				norm = Vector3.BACK
+			var b := all_verts.size()
+			all_verts.append_array([p0, p1, p0t, p1t])
+			all_normals.append_array([norm, norm, norm, norm])
+			all_colors.append_array([wall_col, wall_col, wall_col, wall_col])
+			all_idx.append_array([b, b+2, b+1, b+1, b+2, b+3])
+
+		# Roof — fan triangulation from vertex 0
+		var rb := all_verts.size()
+		for i in pts.size():
+			all_verts.append(Vector3(pts[i].x, h, pts[i].y))
+			all_normals.append(Vector3.UP)
+			all_colors.append(roof_col)
+		for i in range(1, pts.size() - 1):
+			all_idx.append_array([rb, rb + i, rb + i + 1])
+
+	if all_verts.is_empty(): return
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = all_verts
+	arrays[Mesh.ARRAY_NORMAL] = all_normals
+	arrays[Mesh.ARRAY_COLOR]  = all_colors
+	arrays[Mesh.ARRAY_INDEX]  = all_idx
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mi := MeshInstance3D.new()
+	mi.mesh = am
+	mi.set_surface_override_material(0, mat)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(mi)
 
 func _build_procedural() -> void:
@@ -401,29 +535,33 @@ func _add_windows(px: float, pz: float, h: float, bw: float, bd: float, frame_co
 			add_child(win)
 
 func _place_tree(px: float, pz: float) -> void:
-	var trunk_h: float = 0.9 + _rng.randf()*0.5
-	var tm := CylinderMesh.new()
-	tm.top_radius = 0.07; tm.bottom_radius = 0.13; tm.height = trunk_h
-	tm.radial_segments = 6
-	var trunk := MeshInstance3D.new()
-	trunk.mesh = tm
-	trunk.set_surface_override_material(0, _mat(Color(0.28,0.18,0.08)))
-	trunk.position = Vector3(px, trunk_h*0.5, pz)
-	trunk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	add_child(trunk)
-	# Crown — two layers for fullness
-	for layer in [0,1]:
-		var sm := SphereMesh.new()
-		var cr: float = 0.5 + _rng.randf()*0.35 - float(layer)*0.15
-		sm.radius = cr; sm.height = cr*1.6
-		sm.radial_segments = 7; sm.rings = 5
-		var crown := MeshInstance3D.new()
-		crown.mesh = sm
-		var g: float = 0.22 + _rng.randf()*0.12
-		crown.set_surface_override_material(0, _mat(Color(0.08+_rng.randf()*0.06, g, 0.06)))
-		crown.position = Vector3(px, trunk_h + cr*0.7 + float(layer)*0.3, pz)
-		crown.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		add_child(crown)
+	var count := 3 + _rng.randi() % 2
+	for _i in count:
+		var ox    := (_rng.randf() - 0.5) * TCELL * 0.85
+		var oz    := (_rng.randf() - 0.5) * TCELL * 0.85
+		var sx    := 0.65 + _rng.randf() * 0.60
+		var trunk_h := (0.8 + _rng.randf() * 0.5) * sx
+		var tm := CylinderMesh.new()
+		tm.top_radius = 0.07 * sx; tm.bottom_radius = 0.13 * sx; tm.height = trunk_h
+		tm.radial_segments = 6
+		var trunk := MeshInstance3D.new()
+		trunk.mesh = tm
+		trunk.set_surface_override_material(0, _mat(Color(0.25 + _rng.randf()*0.08, 0.16, 0.07)))
+		trunk.position = Vector3(px + ox, trunk_h * 0.5, pz + oz)
+		trunk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		add_child(trunk)
+		for layer in [0, 1]:
+			var sm := SphereMesh.new()
+			var cr: float = (0.48 + _rng.randf()*0.35 - float(layer)*0.14) * sx
+			sm.radius = cr; sm.height = cr * 1.6
+			sm.radial_segments = 7; sm.rings = 5
+			var crown := MeshInstance3D.new()
+			crown.mesh = sm
+			var g: float = 0.20 + _rng.randf() * 0.14
+			crown.set_surface_override_material(0, _mat(Color(0.07 + _rng.randf()*0.07, g, 0.05 + _rng.randf()*0.03)))
+			crown.position = Vector3(px + ox, trunk_h + cr * 0.7 + float(layer) * 0.28, pz + oz)
+			crown.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			add_child(crown)
 
 func _place_water(px: float, pz: float) -> void:
 	var mat := _mat_new(Color(0.10,0.28,0.48,0.82))

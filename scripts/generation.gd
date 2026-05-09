@@ -13,6 +13,7 @@ const TG        := 20
 var _clat: float
 var _clon: float
 var _road_geoms: Array = []
+var _bld_geoms:  Array = []
 
 func _ready() -> void:
 	progress_bar.value = 0
@@ -87,9 +88,10 @@ func _on_osm_done(result: int, code: int, _h: PackedStringArray, body: PackedByt
 	if road_n == 0 and bld_n == 0:
 		_fallback("EMPTY OSM GRID — PROCEDURAL MAP")
 		return
-	_main().ai_tile_grid = grid
-	_main().using_ai_map = true
-	_main().osm_roads    = _road_geoms
+	_main().ai_tile_grid  = grid
+	_main().using_ai_map  = true
+	_main().osm_roads     = _road_geoms
+	_main().osm_buildings = _bld_geoms
 	_set_status("MAPPED: %d BUILDINGS · %d ROAD TILES — FETCHING GROUND TEXTURE..." % [bld_n, road_n])
 	progress_bar.value = 85
 	_fetch_sat_ground()
@@ -100,6 +102,7 @@ func _on_osm_done(result: int, code: int, _h: PackedStringArray, body: PackedByt
 
 func _rasterize(elements: Array) -> Array:
 	_road_geoms.clear()
+	_bld_geoms.clear()
 	var grid: Array = []
 	for _r in TG:
 		var row: Array = []; for _c in TG: row.append("GRASS")
@@ -122,12 +125,21 @@ func _rasterize(elements: Array) -> Array:
 		if tags.get("natural","") == "water" or tags.has("waterway"):
 			_fill_poly(grid, _geom_to_cells(el.get("geometry", [])), "WATER")
 
-	# 3. Buildings (fill polygon)
+	# 3. Buildings (fill polygon + collect footprint for 3D extrusion)
 	for el in elements:
 		if el.get("type") != "way": continue
 		var tags: Dictionary = el.get("tags", {})
 		if tags.has("building"):
-			_fill_poly(grid, _geom_to_cells(el.get("geometry", [])), "BUILDING")
+			var geom: Array = el.get("geometry", [])
+			_fill_poly(grid, _geom_to_cells(geom), "BUILDING")
+			if geom.size() >= 3:
+				var h_str: String = str(tags.get("height", "0")).split(" ")[0]
+				_bld_geoms.append({
+					"geom":   geom,
+					"levels": int(float(str(tags.get("building:levels", "0")))),
+					"height": float(h_str) if h_str.is_valid_float() else 0.0,
+					"type":   str(tags.get("building", "yes"))
+				})
 
 	# 4. Roads (polyline with width, drawn last so they cut through buildings)
 	for el in elements:
