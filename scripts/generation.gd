@@ -88,9 +88,9 @@ func _on_osm_done(result: int, code: int, _h: PackedStringArray, body: PackedByt
 		return
 	_main().ai_tile_grid = grid
 	_main().using_ai_map = true
-	_set_status("MAPPED: %d BUILDINGS · %d ROAD TILES — LAUNCHING" % [bld_n, road_n])
-	progress_bar.value = 100
-	_launch()
+	_set_status("MAPPED: %d BUILDINGS · %d ROAD TILES — FETCHING GROUND TEXTURE..." % [bld_n, road_n])
+	progress_bar.value = 85
+	_fetch_sat_ground()
 
 # ── Rasterisation ─────────────────────────────────────────────
 # Pass order matters: later passes overwrite earlier ones.
@@ -197,6 +197,28 @@ func _mark(grid: Array, r: int, c: int, label: String, half_w: int) -> void:
 			var rr := r + dr; var cc := c + dc
 			if rr >= 0 and rr < TG and cc >= 0 and cc < TG:
 				grid[rr][cc] = label
+
+# ── Satellite ground texture ──────────────────────────────────
+
+func _fetch_sat_ground() -> void:
+	var cos_lat := cos(deg_to_rad(_clat))
+	var dlat    := REAL_HALF / 111000.0
+	var dlon    := REAL_HALF / (111000.0 * maxf(cos_lat, 0.0001))
+	var s := _clat - dlat;  var n := _clat + dlat
+	var w := _clon - dlon;  var e := _clon + dlon
+	var url := ("https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/[%.6f,%.6f,%.6f,%.6f]/1024x1024?access_token=%s"
+		% [w, s, e, n, _S.MAPBOX])
+	var req := HTTPRequest.new()
+	add_child(req)
+	req.request_completed.connect(func(result: int, code: int, _h: PackedStringArray, body: PackedByteArray) -> void:
+		if result == OK and code == 200:
+			_main().sat_image_data = body
+		req.queue_free()
+		progress_bar.value = 100
+		_set_status("MAP READY — LAUNCHING")
+		_launch()
+	)
+	req.request(url)
 
 # ── Helpers ───────────────────────────────────────────────────
 

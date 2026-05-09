@@ -13,6 +13,7 @@ var active_lon:   float  = -74.006
 var active_name:  String = "New York, NY"
 var ai_tile_grid: Array  = []
 var using_ai_map: bool   = false
+var sat_image_data: PackedByteArray = PackedByteArray()
 
 func _ready() -> void:
 	_fade.color.a = 1.0   # Start fully black; _do_transition fades in

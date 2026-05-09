@@ -148,10 +148,25 @@ func _ready() -> void:
 
 func _build_world() -> void:
 	var main := _main()
-	# Base ground
+	# Base ground — solid border/fill, always present
 	var gnd := _box(Vector3(HALF*2.0+1.0, 0.12, HALF*2.0+1.0), _mat(Color(0.13,0.18,0.10)))
 	gnd.position = Vector3(0.0,-0.06,0.0)
 	add_child(gnd)
+	# Satellite photo overlay — covers exact play area when image data is available
+	var sat_raw = main.get("sat_image_data")
+	if sat_raw is PackedByteArray and (sat_raw as PackedByteArray).size() > 0:
+		var img := Image.new()
+		if img.load_jpg_from_buffer(sat_raw as PackedByteArray) == OK:
+			var sat_mat := StandardMaterial3D.new()
+			sat_mat.albedo_texture = ImageTexture.create_from_image(img)
+			sat_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			var pm := PlaneMesh.new()
+			pm.size = Vector2(HALF * 2.0, HALF * 2.0)
+			var sat_plane := MeshInstance3D.new()
+			sat_plane.mesh = pm
+			sat_plane.set_surface_override_material(0, sat_mat)
+			sat_plane.position = Vector3(0.0, 0.005, 0.0)
+			add_child(sat_plane)
 
 	tmap.clear()
 	for r in TG:
