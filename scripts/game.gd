@@ -1029,10 +1029,13 @@ func _update_units(delta: float) -> void:
 func _death_effect(unit: Unit) -> void:
 	Sounds.play("death", -8.0)
 	unit.set_selected(false)
+	var pos  := unit.global_position
+	var team := unit.team
 	var tw := create_tween().set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
 	tw.tween_property(unit, "scale", Vector3(0.0, 0.0, 0.0), 0.26)
 	await tw.finished
 	if is_instance_valid(unit): unit.queue_free()
+	_spawn_body(pos, team)
 	# Attrition defeat: waves started, no player units, can't afford cheapest
 	if wave_num > 0 and game_active:
 		var alive := false
@@ -1042,6 +1045,25 @@ func _death_effect(unit: Unit) -> void:
 				alive = true; break
 		if not alive and supplies < 75:
 			_show_endgame(false)
+
+func _spawn_body(pos: Vector3, team: String) -> void:
+	var torso_col := Color(0.52, 0.40, 0.28) if team == "player" else Color(0.26, 0.32, 0.20)
+	var head_col  := Color(0.72, 0.58, 0.46)
+	var root := Node3D.new()
+	root.position = Vector3(pos.x, 0.0, pos.z)
+	root.rotation.y = _rng.randf() * TAU
+	add_child(root)
+	var torso := _box(Vector3(0.36, 0.07, 0.68), _mat(torso_col))
+	torso.position = Vector3(0.0, 0.035, 0.0)
+	root.add_child(torso)
+	var head_mesh := SphereMesh.new()
+	head_mesh.radius = 0.13; head_mesh.height = 0.18
+	head_mesh.radial_segments = 6; head_mesh.rings = 4
+	var head := MeshInstance3D.new()
+	head.mesh = head_mesh
+	head.set_surface_override_material(0, _mat(head_col))
+	head.position = Vector3(0.0, 0.09, 0.32)
+	root.add_child(head)
 
 func _tick_player(u: Unit, delta: float) -> void:
 	if u.state == Unit.State.MOVING:
