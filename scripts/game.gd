@@ -176,6 +176,7 @@ func _build_world() -> void:
 
 	if main.using_ai_map and main.ai_tile_grid.size() >= 10:
 		_build_from_grid(main.ai_tile_grid)
+		_build_osm_roads()
 	else:
 		_build_procedural()
 
@@ -216,10 +217,74 @@ func _build_from_grid(grid: Array) -> void:
 			tmap[r][c] = tile
 			var px: float = _tx(c); var pz: float = _tz(r)
 			match tile:
-				TILE_ROAD:     _place_road(px, pz)
 				TILE_BUILDING: _place_building(px, pz, r, c)
 				TILE_TREE:     _place_tree(px, pz)
 				TILE_WATER:    _place_water(px, pz)
+
+func _build_osm_roads() -> void:
+	var mn  := _main()
+	var roads = mn.get("osm_roads")
+	if not roads is Array or (roads as Array).is_empty(): return
+	var clat    : float = mn.active_lat
+	var clon    : float = mn.active_lon
+	var cos_lat := cos(deg_to_rad(clat))
+	var scale   := HALF / 100.0   # game units per real metre
+
+	var all_verts   := PackedVector3Array()
+	var all_normals := PackedVector3Array()
+	var all_idx     := PackedInt32Array()
+	var base := 0
+
+	for road_entry in (roads as Array):
+		var geom: Array = road_entry.get("geom", [])
+		if geom.size() < 2: continue
+		var rw: float = 0.7 if road_entry.get("width", 1) == 1 else 1.2
+
+		var pts: Array = []
+		for pt in geom:
+			var lat := float(pt.get("lat", 0.0))
+			var lon := float(pt.get("lon", 0.0))
+			var dy  := (lat - clat) * 111000.0
+			var dx  := (lon - clon) * 111000.0 * cos_lat
+			pts.append(Vector3(dx * scale, 0.03, -dy * scale))
+
+		for i in pts.size():
+			var dir: Vector3
+			if i == 0:
+				dir = pts[1] - pts[0]
+			elif i == pts.size() - 1:
+				dir = pts[i] - pts[i - 1]
+			else:
+				dir = pts[i + 1] - pts[i - 1]
+			dir.y = 0.0
+			if dir.length_squared() < 0.00001: dir = Vector3.RIGHT
+			dir = dir.normalized()
+			var perp := Vector3(-dir.z, 0.0, dir.x) * rw * 0.5
+			all_verts.append(pts[i] + perp)
+			all_verts.append(pts[i] - perp)
+			all_normals.append(Vector3.UP)
+			all_normals.append(Vector3.UP)
+
+		for i in range(pts.size() - 1):
+			var b := base + i * 2
+			all_idx.append(b);     all_idx.append(b + 1); all_idx.append(b + 2)
+			all_idx.append(b + 1); all_idx.append(b + 3); all_idx.append(b + 2)
+
+		base += pts.size() * 2
+
+	if all_verts.is_empty(): return
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = all_verts
+	arrays[Mesh.ARRAY_NORMAL] = all_normals
+	arrays[Mesh.ARRAY_INDEX]  = all_idx
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mi := MeshInstance3D.new()
+	mi.mesh = am
+	mi.set_surface_override_material(0, _mat(Color(0.16, 0.16, 0.16)))
+	add_child(mi)
 
 func _build_procedural() -> void:
 	for col in [5,6,13,14]:

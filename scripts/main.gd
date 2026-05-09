@@ -11,9 +11,10 @@ var _current: Node = null
 var active_lat:   float  = 40.7128
 var active_lon:   float  = -74.006
 var active_name:  String = "New York, NY"
-var ai_tile_grid: Array  = []
-var using_ai_map: bool   = false
+var ai_tile_grid:   Array  = []
+var using_ai_map:   bool   = false
 var sat_image_data: PackedByteArray = PackedByteArray()
+var osm_roads:      Array  = []
 
 func _ready() -> void:
 	_fade.color.a = 1.0   # Start fully black; _do_transition fades in

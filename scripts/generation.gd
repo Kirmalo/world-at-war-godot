@@ -12,6 +12,7 @@ const TG        := 20
 
 var _clat: float
 var _clon: float
+var _road_geoms: Array = []
 
 func _ready() -> void:
 	progress_bar.value = 0
@@ -88,6 +89,7 @@ func _on_osm_done(result: int, code: int, _h: PackedStringArray, body: PackedByt
 		return
 	_main().ai_tile_grid = grid
 	_main().using_ai_map = true
+	_main().osm_roads    = _road_geoms
 	_set_status("MAPPED: %d BUILDINGS · %d ROAD TILES — FETCHING GROUND TEXTURE..." % [bld_n, road_n])
 	progress_bar.value = 85
 	_fetch_sat_ground()
@@ -97,6 +99,7 @@ func _on_osm_done(result: int, code: int, _h: PackedStringArray, body: PackedByt
 # green space < water < buildings < roads
 
 func _rasterize(elements: Array) -> Array:
+	_road_geoms.clear()
 	var grid: Array = []
 	for _r in TG:
 		var row: Array = []; for _c in TG: row.append("GRASS")
@@ -134,7 +137,10 @@ func _rasterize(elements: Array) -> Array:
 		if hw == "" or hw in ["footway","path","cycleway","steps","track","bridleway"]:
 			continue
 		var w := 2 if hw in ["motorway","trunk","primary","secondary","pedestrian"] else 1
-		var cells := _geom_to_cells(el.get("geometry", []))
+		var geom: Array = el.get("geometry", [])
+		if geom.size() >= 2:
+			_road_geoms.append({"geom": geom, "width": w})
+		var cells := _geom_to_cells(geom)
 		for i in range(cells.size() - 1):
 			_draw_line(grid, cells[i].x, cells[i].y, cells[i+1].x, cells[i+1].y, "ROAD", w)
 
