@@ -20,6 +20,7 @@ func _ready() -> void:
 	var main := _main()
 	_clat = main.active_lat
 	_clon = main.active_lon
+	_ensure_cache_dir()
 	_set_status("FETCHING SATELLITE PREVIEW...")
 	http_sat.request_completed.connect(_on_sat_done)
 	http_osm.request_completed.connect(_on_osm_done)
@@ -27,14 +28,45 @@ func _ready() -> void:
 		% [_clon, _clat, _S.MAPBOX])
 	http_sat.request(url)
 
+# ── Cache helpers ─────────────────────────────────────────────────
+
+func _cache_key() -> String:
+	return "%.4f_%.4f" % [_clat, _clon]
+
+func _cache_dir() -> String:
+	return "user://map_cache/"
+
+func _ensure_cache_dir() -> void:
+	DirAccess.make_dir_recursive_absolute(_cache_dir())
+
+func _osm_cache_path() -> String:
+	return _cache_dir() + _cache_key() + ".json"
+
+func _sat_cache_path() -> String:
+	return _cache_dir() + _cache_key() + ".sat"
+
+# ── Satellite preview ─────────────────────────────────────────────
+
 func _on_sat_done(result: int, code: int, _h: PackedStringArray, body: PackedByteArray) -> void:
 	if result == OK and code == 200:
 		var img := Image.new()
 		if img.load_jpg_from_buffer(body) == OK:
 			sat_preview.texture = ImageTexture.create_from_image(img)
 	progress_bar.value = 30
-	_set_status("READING OPENSTREETMAP DATA...")
-	_fetch_osm()
+
+	# Check OSM cache before hitting the network
+	var osm_path := _osm_cache_path()
+	if FileAccess.file_exists(osm_path):
+		_set_status("LOADING MAP DATA FROM CACHE...")
+		var f := FileAccess.open(osm_path, FileAccess.READ)
+		var cached := f.get_as_text()
+		f.close()
+		_process_osm(cached, true)
+	else:
+		_set_status("READING OPENSTREETMAP DATA...")
+		_fetch_osm()
+
+# ── OSM fetch ─────────────────────────────────────────────────────
 
 func _fetch_osm() -> void:
 	var cos_lat := cos(deg_to_rad(_clat))
@@ -60,10 +92,21 @@ func _on_osm_done(result: int, code: int, _h: PackedStringArray, body: PackedByt
 	if result != OK or code != 200:
 		_fallback("OSM UNAVAILABLE (CODE %d) — PROCEDURAL MAP" % code)
 		return
+	var body_str := body.get_string_from_utf8()
+	# Persist to cache for next visit
+	var f := FileAccess.open(_osm_cache_path(), FileAccess.WRITE)
+	if f:
+		f.store_string(body_str)
+		f.close()
+	_process_osm(body_str, false)
+
+# ── OSM processing (shared between network and cache paths) ───────
+
+func _process_osm(body_str: String, from_cache: bool) -> void:
 	progress_bar.value = 70
 	_set_status("PLACING BUILDINGS AND ROADS...")
 	var json := JSON.new()
-	if json.parse(body.get_string_from_utf8()) != OK:
+	if json.parse(body_str) != OK:
 		_fallback("OSM PARSE ERROR — PROCEDURAL MAP")
 		return
 	var data: Dictionary = json.get_data()
@@ -72,7 +115,6 @@ func _on_osm_done(result: int, code: int, _h: PackedStringArray, body: PackedByt
 		_fallback("NO OSM DATA FOR THIS LOCATION — PROCEDURAL MAP")
 		return
 	var grid := _rasterize(elements)
-	# Sanity check: if fewer than 4 non-grass cells, treat as empty
 	var hits := 0
 	for row in grid:
 		for cell in row:
@@ -92,11 +134,24 @@ func _on_osm_done(result: int, code: int, _h: PackedStringArray, body: PackedByt
 	_main().using_ai_map  = true
 	_main().osm_roads     = _road_geoms
 	_main().osm_buildings = _bld_geoms
-	_set_status("MAPPED: %d BUILDINGS · %d ROAD TILES — FETCHING GROUND TEXTURE..." % [bld_n, road_n])
+	var src := " (CACHED)" if from_cache else ""
+	_set_status("MAPPED%s: %d BUILDINGS · %d ROAD TILES — FETCHING GROUND TEXTURE..." % [src, bld_n, road_n])
 	progress_bar.value = 85
-	_fetch_sat_ground()
 
-# ── Rasterisation ─────────────────────────────────────────────
+	# Check satellite ground texture cache
+	var sat_path := _sat_cache_path()
+	if FileAccess.file_exists(sat_path):
+		_set_status("LOADING SATELLITE FROM CACHE...")
+		var sf := FileAccess.open(sat_path, FileAccess.READ)
+		_main().sat_image_data = sf.get_buffer(sf.get_length())
+		sf.close()
+		progress_bar.value = 100
+		_set_status("MAP READY — LAUNCHING" + (" (CACHED)" if from_cache else ""))
+		_launch()
+	else:
+		_fetch_sat_ground()
+
+# ── Rasterisation ─────────────────────────────────────────────────
 # Pass order matters: later passes overwrite earlier ones.
 # green space < water < buildings < roads
 
@@ -164,10 +219,10 @@ func _geom_to_cells(geom: Array) -> Array:
 	for pt in geom:
 		var lat: float = float(pt.get("lat", 0.0))
 		var lon: float = float(pt.get("lon", 0.0))
-		var dy  := (lat - _clat) * 111000.0            # north positive
-		var dx  := (lon - _clon) * 111000.0 * cos_lat  # east positive
-		var nc  := (dx / REAL_HALF + 1.0) * 0.5        # 0..1
-		var nr  := (-dy / REAL_HALF + 1.0) * 0.5       # 0..1, north = low row
+		var dy  := (lat - _clat) * 111000.0
+		var dx  := (lon - _clon) * 111000.0 * cos_lat
+		var nc  := (dx / REAL_HALF + 1.0) * 0.5
+		var nr  := (-dy / REAL_HALF + 1.0) * 0.5
 		var col := clampi(int(nc * TG), 0, TG - 1)
 		var row := clampi(int(nr * TG), 0, TG - 1)
 		cells.append(Vector2i(col, row))
@@ -216,7 +271,7 @@ func _mark(grid: Array, r: int, c: int, label: String, half_w: int) -> void:
 			if rr >= 0 and rr < TG and cc >= 0 and cc < TG:
 				grid[rr][cc] = label
 
-# ── Satellite ground texture ──────────────────────────────────
+# ── Satellite ground texture ──────────────────────────────────────
 
 func _fetch_sat_ground() -> void:
 	var cos_lat := cos(deg_to_rad(_clat))
@@ -231,6 +286,11 @@ func _fetch_sat_ground() -> void:
 	req.request_completed.connect(func(result: int, code: int, _h: PackedStringArray, body: PackedByteArray) -> void:
 		if result == OK and code == 200:
 			_main().sat_image_data = body
+			# Save satellite to cache for next visit
+			var sf := FileAccess.open(_sat_cache_path(), FileAccess.WRITE)
+			if sf:
+				sf.store_buffer(body)
+				sf.close()
 		req.queue_free()
 		progress_bar.value = 100
 		_set_status("MAP READY — LAUNCHING")
@@ -238,7 +298,7 @@ func _fetch_sat_ground() -> void:
 	)
 	req.request(url)
 
-# ── Helpers ───────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────
 
 func _fallback(msg: String) -> void:
 	_main().ai_tile_grid = []

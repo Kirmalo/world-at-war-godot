@@ -24,6 +24,17 @@ var path_idx: int     = 0
 var suppression: float = 0.0
 var selected: bool    = false
 var attack_move: bool = false
+var in_cover: bool    = false
+var cover_seek_timer: float = 0.0
+var heal_timer: float = 0.0
+var ability_cooldown: float = 0.0
+var overwatch: bool   = false
+var suppressing: bool = false
+var suppressing_timer: float = 0.0
+var garrisoned: bool          = false
+var garrison_tile: Vector2i   = Vector2i(-1, -1)
+var garrison_pending: Vector2i = Vector2i(-1, -1)
+var vet_kills: int            = 0
 
 func setup(p_kind: String, p_team: String, def: Dictionary) -> void:
 	kind         = p_kind
@@ -56,8 +67,15 @@ func issue_move(dest: Vector3) -> void:
 	state = State.MOVING
 
 func _process(delta: float) -> void:
-	suppression = max(0.0, suppression - delta * 0.25)
-	fire_timer  = max(0.0, fire_timer  - delta)
+	suppression       = max(0.0, suppression       - delta * 0.25)
+	fire_timer        = max(0.0, fire_timer        - delta)
+	heal_timer        = max(0.0, heal_timer        - delta)
+	cover_seek_timer  = max(0.0, cover_seek_timer  - delta)
+	ability_cooldown  = max(0.0, ability_cooldown  - delta)
+	if suppressing_timer > 0.0:
+		suppressing_timer = max(0.0, suppressing_timer - delta)
+		if suppressing_timer <= 0.0:
+			suppressing = false
 	_refresh_hp_bar()
 
 func _refresh_hp_bar() -> void:

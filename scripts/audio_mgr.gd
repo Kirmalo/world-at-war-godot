@@ -9,7 +9,7 @@ var _cache: Dictionary = {}
 
 func _ready() -> void:
 	# Pre-generate everything so first combat has no stutter
-	for s in ["shot_rifle","shot_mg","shot_sniper","explode","click","death","wave_alarm","victory","defeat"]:
+	for s in ["shot_rifle","shot_mg","shot_sniper","explode","click","death","wave_alarm","victory","defeat","heal","capture","capture_lost","deploy","hq_alarm"]:
 		_cache[s] = _gen(s)
 
 # ── Public API ────────────────────────────────────────────────
@@ -51,8 +51,13 @@ func _gen(sound: String) -> PackedFloat32Array:
 		"click":       return _click()
 		"death":       return _death_sfx()
 		"wave_alarm":  return _alarm()
-		"victory":     return _victory()
-		"defeat":      return _defeat_sfx()
+		"victory":       return _victory()
+		"defeat":        return _defeat_sfx()
+		"heal":          return _heal_sfx()
+		"capture":       return _capture_sfx()
+		"capture_lost":  return _capture_lost_sfx()
+		"deploy":        return _deploy_sfx()
+		"hq_alarm":      return _hq_alarm_sfx()
 	return PackedFloat32Array()
 
 # ── Sound generators ──────────────────────────────────────────
@@ -158,4 +163,59 @@ func _defeat_sfx() -> PackedFloat32Array:
 		var env  := minf(nt / 0.03, 1.0) * maxf(1.0 - nt / nd, 0.0)
 		s[i] = clampf(sin(TAU * freq * t)       * env * 0.45
 		             + sin(TAU * freq * 0.5 * t) * env * 0.30, -1.0, 1.0)
+	return s
+
+func _heal_sfx() -> PackedFloat32Array:
+	var n := int(RATE * 0.26)
+	var s := PackedFloat32Array(); s.resize(n)
+	for i in n:
+		var t   := float(i) / float(RATE)
+		var env := minf(t * 28.0, 1.0) * maxf(1.0 - t * 4.2, 0.0)
+		s[i] = clampf(
+			sin(TAU * 660.0 * t) * env * 0.40
+		  + sin(TAU * 990.0 * t) * env * 0.22, -1.0, 1.0)
+	return s
+
+func _capture_sfx() -> PackedFloat32Array:
+	var n := int(RATE * 0.50)
+	var s := PackedFloat32Array(); s.resize(n)
+	for i in n:
+		var t   := float(i) / float(RATE)
+		var env := minf(t * 18.0, 1.0) * maxf(1.0 - t * 2.2, 0.0)
+		s[i] = clampf(
+			sin(TAU * 523.0 * t) * env * 0.36
+		  + sin(TAU * 659.0 * t) * env * minf(t * 14.0, 1.0) * 0.28
+		  + sin(TAU * 784.0 * t) * env * minf(t * 22.0, 1.0) * 0.18, -1.0, 1.0)
+	return s
+
+func _capture_lost_sfx() -> PackedFloat32Array:
+	var n := int(RATE * 0.48)
+	var s := PackedFloat32Array(); s.resize(n)
+	for i in n:
+		var t    := float(i) / float(RATE)
+		var env  := minf(t * 15.0, 1.0) * maxf(1.0 - t * 2.4, 0.0)
+		var freq := maxf(784.0 - t * 820.0, 300.0)
+		s[i] = clampf(sin(TAU * freq * t) * env * 0.46, -1.0, 1.0)
+	return s
+
+func _deploy_sfx() -> PackedFloat32Array:
+	var n := int(RATE * 0.22)
+	var s := PackedFloat32Array(); s.resize(n)
+	for i in n:
+		var t     := float(i) / float(RATE)
+		var thud  := sin(TAU * 85.0 * t)   * exp(-t * 26.0) * 0.62
+		var noise := randf_range(-1.0,1.0) * exp(-t * 20.0) * 0.32
+		var tone  := sin(TAU * 430.0 * t)  * exp(-t * 42.0) * 0.26
+		s[i] = clampf(thud + noise + tone, -1.0, 1.0)
+	return s
+
+func _hq_alarm_sfx() -> PackedFloat32Array:
+	var n := int(RATE * 0.38)
+	var s := PackedFloat32Array(); s.resize(n)
+	for i in n:
+		var t  := float(i) / float(RATE)
+		var b1 := sin(TAU * 1080.0 * t) * maxf(minf(t * 42.0, 1.0) * maxf(1.0-(t-0.01)*12.0, 0.0), 0.0)
+		var t2 := maxf(t - 0.19, 0.0)
+		var b2 := sin(TAU * 1080.0 * t) * maxf(minf(t2 * 42.0, 1.0) * maxf(1.0-(t2-0.01)*12.0, 0.0), 0.0)
+		s[i] = clampf((b1 + b2) * 0.52, -1.0, 1.0)
 	return s
