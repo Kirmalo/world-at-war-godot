@@ -1,6 +1,17 @@
 extends Control
 
-const _S        := preload("res://scripts/secrets.gd")
+# secrets.gd is git-ignored. Copy scripts/secrets.gd.example → scripts/secrets.gd
+# and fill in your Mapbox token before running. Without it, sat/map fetches are skipped.
+var _mapbox_key: String = ""
+func _get_mapbox_key() -> String:
+	if _mapbox_key.is_empty():
+		var s = load("res://scripts/secrets.gd")
+		if s != null and s.get_script_constant_map().has("MAPBOX"):
+			_mapbox_key = str(s.get_script_constant_map()["MAPBOX"])
+		else:
+			_mapbox_key = ProjectSettings.get_setting("mapbox/api_key", "")
+	return _mapbox_key
+
 const REAL_HALF := 100.0   # metres from centre to edge — 200 × 200 m battlefield
 const TG        := 20
 
@@ -21,11 +32,17 @@ func _ready() -> void:
 	_clat = main.active_lat
 	_clon = main.active_lon
 	_ensure_cache_dir()
-	_set_status("FETCHING SATELLITE PREVIEW...")
 	http_sat.request_completed.connect(_on_sat_done)
 	http_osm.request_completed.connect(_on_osm_done)
+	var key := _get_mapbox_key()
+	if key.is_empty():
+		_set_status("NO API KEY — PROCEDURAL MAP")
+		progress_bar.value = 100
+		_fallback("NO MAPBOX KEY — PROCEDURAL MAP")
+		return
+	_set_status("FETCHING SATELLITE PREVIEW...")
 	var url := ("https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/%.6f,%.6f,17,0/600x600?access_token=%s"
-		% [_clon, _clat, _S.MAPBOX])
+		% [_clon, _clat, key])
 	http_sat.request(url)
 
 # ── Cache helpers ─────────────────────────────────────────────────
@@ -280,7 +297,7 @@ func _fetch_sat_ground() -> void:
 	var s := _clat - dlat;  var n := _clat + dlat
 	var w := _clon - dlon;  var e := _clon + dlon
 	var url := ("https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/[%.6f,%.6f,%.6f,%.6f]/1024x1024?access_token=%s"
-		% [w, s, e, n, _S.MAPBOX])
+		% [w, s, e, n, _get_mapbox_key()])
 	var req := HTTPRequest.new()
 	add_child(req)
 	req.request_completed.connect(func(result: int, code: int, _h: PackedStringArray, body: PackedByteArray) -> void:
