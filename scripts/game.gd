@@ -344,15 +344,31 @@ func _setup_environment() -> void:
 	env.adjustment_contrast    = 1.08
 	env.adjustment_saturation  = 0.82
 
+	# ── Mobile render tier — strip expensive effects on handheld ──
+	var _on_mobile := OS.has_feature("mobile") or OS.get_name() in ["Android", "iOS"]
+	if _on_mobile:
+		env.sdfgi_enabled          = false   # biggest win, GPU-intensive voxel GI
+		env.ssr_enabled            = false   # screen-space reflections off
+		env.ssil_enabled           = false   # screen-space indirect lighting off
+		env.volumetric_fog_enabled = false   # volumetric raymarching off
+		env.glow_enabled           = false   # post-process bloom off
+		env.ssao_enabled           = false   # SSAO too costly without SDFGI to justify it
+		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		get_viewport().msaa_3d     = Viewport.MSAA_DISABLED
+
 	var we := $WorldEnvironment as WorldEnvironment
 	if we: we.environment = env
 
 	var cam_attr := CameraAttributesPractical.new()
-	cam_attr.dof_blur_far_enabled    = true
-	cam_attr.dof_blur_far_distance   = 34.0
-	cam_attr.dof_blur_far_transition = 16.0
-	cam_attr.dof_blur_near_enabled   = false
-	cam_attr.dof_blur_amount         = 0.08
+	if _on_mobile:
+		cam_attr.dof_blur_far_enabled  = false   # DoF blur is expensive on tile GPUs
+		cam_attr.dof_blur_near_enabled = false
+	else:
+		cam_attr.dof_blur_far_enabled    = true
+		cam_attr.dof_blur_far_distance   = 34.0
+		cam_attr.dof_blur_far_transition = 16.0
+		cam_attr.dof_blur_near_enabled   = false
+		cam_attr.dof_blur_amount         = 0.08
 	camera.attributes = cam_attr
 
 func _build_from_grid(grid: Array) -> void:
