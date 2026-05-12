@@ -3506,9 +3506,33 @@ func _ground_hit(screen_pos: Vector2) -> Vector3:
 
 # ── ENDGAME ───────────────────────────────────────────────────
 
+func _save_score(victory: bool) -> void:
+	var mn := _main()
+	var key := "%.4f_%.4f" % [float(mn.active_lat), float(mn.active_lon)]
+	var scores: Dictionary = {}
+	if FileAccess.file_exists("user://scores.json"):
+		var rf := FileAccess.open("user://scores.json", FileAccess.READ)
+		if rf != null:
+			var j := JSON.new()
+			if j.parse(rf.get_as_text()) == OK:
+				var d = j.get_data()
+				if d is Dictionary: scores = d
+			rf.close()
+	var prev: Dictionary = scores.get(key, {})
+	scores[key] = {
+		"best_waves": maxi(int(prev.get("best_waves", 0)), wave_num),
+		"kills":      maxi(int(prev.get("kills", 0)), kill_count),
+		"victories":  int(prev.get("victories", 0)) + (1 if victory else 0),
+	}
+	var wf := FileAccess.open("user://scores.json", FileAccess.WRITE)
+	if wf != null:
+		wf.store_string(JSON.stringify(scores, "\t"))
+		wf.close()
+
 func _show_endgame(victory: bool) -> void:
 	if not game_active: return
 	game_active = false
+	_save_score(victory)
 	Sounds.play("victory" if victory else "defeat", 0.0)
 	var panel := $HUD/EndgamePanel as Control
 	if panel == null: return

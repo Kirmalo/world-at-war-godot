@@ -1,6 +1,14 @@
 extends Control
 
-const _S := preload("res://scripts/secrets.gd")
+var _mapbox_key: String = ""
+func _get_mapbox_key() -> String:
+	if _mapbox_key.is_empty():
+		var s = load("res://scripts/secrets.gd")
+		if s != null and s.get_script_constant_map().has("MAPBOX"):
+			_mapbox_key = str(s.get_script_constant_map()["MAPBOX"])
+		else:
+			_mapbox_key = ProjectSettings.get_setting("mapbox/api_key", "")
+	return _mapbox_key
 
 const LOCATIONS := [
 	{"name": "New York, NY",       "lat": 40.7128,  "lon": -74.0060},
@@ -74,10 +82,31 @@ func _pulse_generate_btn() -> void:
 	tw.tween_property(generate_btn, "modulate", Color(1.18, 1.18, 1.18), 0.9).set_ease(Tween.EASE_IN_OUT)
 	tw.tween_property(generate_btn, "modulate", Color(1.00, 1.00, 1.00), 0.9).set_ease(Tween.EASE_IN_OUT)
 
+func _load_scores() -> Dictionary:
+	if not FileAccess.file_exists("user://scores.json"): return {}
+	var f := FileAccess.open("user://scores.json", FileAccess.READ)
+	if f == null: return {}
+	var j := JSON.new()
+	var result := j.parse(f.get_as_text())
+	f.close()
+	if result != OK: return {}
+	var d = j.get_data()
+	return d if d is Dictionary else {}
+
 func _populate_list() -> void:
 	location_list.clear()
+	var scores := _load_scores()
 	for loc in _locs:
-		location_list.add_item(loc.name)
+		var key := "%.4f_%.4f" % [float(loc.lat), float(loc.lon)]
+		var sc: Dictionary = scores.get(key, {})
+		var label := str(loc.name)
+		if not sc.is_empty():
+			var best_waves: int = int(sc.get("best_waves", 0))
+			var kills: int      = int(sc.get("kills", 0))
+			var wins: int       = int(sc.get("victories", 0))
+			var star := "★" if wins > 0 else "◆"
+			label += "  %s W%d | %d KIA" % [star, best_waves, kills]
+		location_list.add_item(label)
 
 func _on_location_selected(idx: int) -> void:
 	if idx >= _locs.size(): return
@@ -93,7 +122,7 @@ func _on_location_selected(idx: int) -> void:
 	_check_osm(float(loc.lat), float(loc.lon))
 
 func _load_sat_preview(lat: float, lon: float) -> void:
-	var url := "https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/%.6f,%.6f,15,0/400x200?access_token=%s" % [lon, lat, _S.MAPBOX]
+	var url := "https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/%.6f,%.6f,15,0/400x200?access_token=%s" % [lon, lat, _get_mapbox_key()]
 	var img_req := HTTPRequest.new()
 	add_child(img_req)
 	img_req.request_completed.connect(func(result: int, code: int, _h: PackedStringArray, body: PackedByteArray) -> void:
@@ -160,7 +189,7 @@ func _on_search(query: String) -> void:
 	if query.is_empty(): return
 	_last_search = query
 	search_edit.editable = false
-	var url := "https://api.mapbox.com/geocoding/v5/mapbox.places/%s.json?access_token=%s&limit=1" % [query.uri_encode(), _S.MAPBOX]
+	var url := "https://api.mapbox.com/geocoding/v5/mapbox.places/%s.json?access_token=%s&limit=1" % [query.uri_encode(), _get_mapbox_key()]
 	http.request(url)
 
 func _on_geocode_done(_result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
