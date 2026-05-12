@@ -3637,6 +3637,28 @@ func _setup_hud() -> void:
 	_grenade_cursor.set_surface_override_material(0, gc_mat)
 	_grenade_cursor.visible = false
 	add_child(_grenade_cursor)
+	_apply_safe_area()
+
+func _apply_safe_area() -> void:
+	var safe := DisplayServer.get_display_safe_area()
+	var vp   := get_viewport().get_visible_rect().size
+	var top    := float(safe.position.y)
+	var bottom := vp.y - float(safe.position.y + safe.size.y)
+	var left   := float(safe.position.x)
+	var right  := vp.x - float(safe.position.x + safe.size.x)
+	if top < 1.0 and bottom < 1.0 and left < 1.0 and right < 1.0: return
+	# TopBar — push down by top inset
+	var tb := $HUD/TopBar as Control
+	if tb: tb.offset_top = top; tb.offset_bottom = 60.0 + top
+	# StatusLabel — push down by top inset
+	var sl := $HUD/StatusLabel as Control
+	if sl: sl.offset_top = 62.0 + top; sl.offset_bottom = 98.0 + top
+	# DeployPanel — push up from bottom inset
+	var dp := $HUD/DeployPanel as Control
+	if dp: dp.offset_top = -80.0 - bottom; dp.offset_bottom = -8.0 - bottom
+	# UnitInfo — push up from bottom inset
+	var ui := $HUD/UnitInfo as Control
+	if ui: ui.offset_top = -150.0 - bottom; ui.offset_bottom = -88.0 - bottom
 
 func _cmd_move() -> void:
 	if not sel_units.is_empty():
