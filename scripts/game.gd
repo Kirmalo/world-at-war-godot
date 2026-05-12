@@ -157,6 +157,11 @@ var _mm_dots:     Dictionary  = {}
 var _suppression_overlay: ColorRect = null
 var _wave_clear_notified: int = 0
 
+# Tutorial
+var _tut_layer:  CanvasLayer = null
+var _tut_step:   int         = 0
+var _tut_active: bool        = false
+
 # Capture points
 var capture_points: Array = []
 
@@ -189,6 +194,8 @@ func _ready() -> void:
 	_init_fog()
 	game_active = true
 	_set_status("DEFEND THE NEIGHBORHOOD  |  TAP TO SELECT AND COMMAND")
+	if not FileAccess.file_exists("user://tutorial_done"):
+		_start_tutorial()
 
 # ── WORLD BUILDING ────────────────────────────────────────────
 
@@ -4420,3 +4427,96 @@ func _box(size: Vector3, mat: Material) -> MeshInstance3D:
 func _tx(c: int) -> float: return float(c - TG/2)*TCELL + TCELL/2.0
 func _tz(r: int) -> float: return float(r - TG/2)*TCELL + TCELL/2.0
 func _main() -> Node: return get_tree().root.get_node("Main")
+
+# ── TUTORIAL ──────────────────────────────────────────────────
+
+const _TUT_STEPS := [
+	"WELCOME, COMMANDER\n\nThis is YOUR HEADQUARTERS — the white marker in the south-east corner. Protect it at all costs.\n\nEnemies will advance from the north-west. Survive all 5 waves to win.",
+	"SELECTING UNITS\n\nTap any of your units (green figures) to select them. A glowing ring appears beneath the selected unit.\n\nTap additional units to add them to your selection. Tap the ✕ button to deselect.",
+	"MOVING & ATTACKING\n\nWith units selected:\n  • TAP OPEN GROUND  →  move there\n  • TAP AN ENEMY  →  engage immediately\n  • TAP A BUILDING or BUNKER  →  take cover\n\nThe MOVE, ATTACK and HOLD buttons give you explicit control.",
+	"SUPPLIES & DEPLOYMENT\n\nYou earn SUPPLIES over time. Use the DEPLOY buttons to call in reinforcements — each unit type has a different cost and role.\n\nCapture the three CAPTURE POINTS on the map for bonuses and additional cover.",
+	"GOOD LUCK\n\nWave 1 is incoming. Hold the line — the neighborhood is counting on you.\n\nThis tutorial won't appear again. You can always adjust settings from the pause menu (⏸).",
+]
+
+func _start_tutorial() -> void:
+	_tut_active = true
+	_tut_step   = 0
+	_tut_layer  = CanvasLayer.new()
+	_tut_layer.layer = 20
+	add_child(_tut_layer)
+	_tut_show_step()
+
+func _tut_show_step() -> void:
+	for c in _tut_layer.get_children(): c.queue_free()
+	if _tut_step >= _TUT_STEPS.size():
+		_tut_finish()
+		return
+
+	# Semi-transparent backdrop
+	var bg := ColorRect.new()
+	bg.color = Color(0.0, 0.0, 0.0, 0.0)   # start transparent; tween in
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_STOP
+	_tut_layer.add_child(bg)
+
+	# Card centred on screen
+	var card := PanelContainer.new()
+	card.set_anchors_preset(Control.PRESET_CENTER)
+	card.custom_minimum_size = Vector2(640, 0)
+	card.anchor_left   = 0.5; card.anchor_right  = 0.5
+	card.anchor_top    = 0.5; card.anchor_bottom = 0.5
+	card.offset_left   = -320; card.offset_right  = 320
+	card.offset_top    = -200; card.offset_bottom = 200
+	_tut_layer.add_child(card)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 20)
+	card.add_child(vbox)
+
+	# Step counter
+	var counter := Label.new()
+	counter.text = "%d / %d" % [_tut_step + 1, _TUT_STEPS.size()]
+	counter.add_theme_font_size_override("font_size", 16)
+	counter.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	counter.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(counter)
+
+	# Body text
+	var body := Label.new()
+	body.text              = _TUT_STEPS[_tut_step]
+	body.autowrap_mode     = TextServer.AUTOWRAP_WORD_SMART
+	body.add_theme_font_size_override("font_size", 22)
+	body.add_theme_color_override("font_color", Color(0.92, 0.90, 0.84))
+	vbox.add_child(body)
+
+	# Advance button
+	var is_last := _tut_step == _TUT_STEPS.size() - 1
+	var btn := Button.new()
+	btn.text = "BATTLE!" if is_last else "NEXT  ›"
+	btn.add_theme_font_size_override("font_size", 22)
+	btn.custom_minimum_size = Vector2(0, 56)
+	if is_last:
+		btn.add_theme_color_override("font_color", Color(0.3, 1.0, 0.45))
+	btn.pressed.connect(func() -> void:
+		Sounds.play("click", -8.0)
+		_tut_step += 1
+		_tut_show_step()
+	)
+	vbox.add_child(btn)
+
+	# Skip button (not on last step)
+	if not is_last:
+		var skip := Button.new()
+		skip.text = "SKIP TUTORIAL"
+		skip.add_theme_font_size_override("font_size", 16)
+		skip.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
+		skip.pressed.connect(func() -> void: _tut_finish())
+		vbox.add_child(skip)
+
+func _tut_finish() -> void:
+	_tut_active = false
+	if _tut_layer:
+		_tut_layer.queue_free()
+		_tut_layer = null
+	var f := FileAccess.open("user://tutorial_done", FileAccess.WRITE)
+	if f: f.store_string("1"); f.close()
