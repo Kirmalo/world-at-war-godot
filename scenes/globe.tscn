@@ -64,6 +64,33 @@ custom_minimum_size = Vector2(0, 160)
 expand_mode = 1
 stretch_mode = 6
 
+[node name="DiffRow" type="HBoxContainer" parent="VBox"]
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="DiffLabel" type="Label" parent="VBox/DiffRow"]
+text = "DIFFICULTY:"
+theme_override_font_sizes/font_size = 20
+theme_override_colors/font_color = Color(0.75, 0.85, 0.75, 1)
+
+[node name="EasyBtn" type="Button" parent="VBox/DiffRow"]
+custom_minimum_size = Vector2(100, 44)
+text = "EASY"
+theme_override_font_sizes/font_size = 18
+theme_override_colors/font_color = Color(0.4, 1.0, 0.55, 1)
+
+[node name="NormalBtn" type="Button" parent="VBox/DiffRow"]
+custom_minimum_size = Vector2(100, 44)
+text = "NORMAL"
+theme_override_font_sizes/font_size = 18
+theme_override_colors/font_color = Color(1.0, 0.85, 0.3, 1)
+
+[node name="HardBtn" type="Button" parent="VBox/DiffRow"]
+custom_minimum_size = Vector2(100, 44)
+text = "HARD"
+theme_override_font_sizes/font_size = 18
+theme_override_colors/font_color = Color(1.0, 0.35, 0.35, 1)
+
 [node name="GenerateBtn" type="Button" parent="VBox"]
 custom_minimum_size = Vector2(0, 64)
 text = "GENERATE BATTLEZONE"

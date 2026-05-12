@@ -54,6 +54,7 @@ func _ready() -> void:
 	http.request_completed.connect(_on_geocode_done)
 	_style_generate_btn()
 	_pulse_generate_btn()
+	_setup_difficulty_btns()
 
 func _style_generate_btn() -> void:
 	var norm := StyleBoxFlat.new()
@@ -213,6 +214,25 @@ func _on_geocode_done(_result: int, code: int, _headers: PackedStringArray, body
 	location_list.select(idx)
 	_on_location_selected(idx)
 	search_edit.clear()
+
+func _setup_difficulty_btns() -> void:
+	var diffs := ["easy", "normal", "hard"]
+	var btns  := [$VBox/DiffRow/EasyBtn, $VBox/DiffRow/NormalBtn, $VBox/DiffRow/HardBtn]
+	var mn    := _main()
+	for i in diffs.size():
+		var d: String = diffs[i]
+		var b: Button = btns[i] as Button
+		b.pressed.connect(func()->void:
+			Sounds.play("click", -8.0)
+			mn.difficulty = d
+			_refresh_diff_btns(btns, diffs, d)
+		)
+	_refresh_diff_btns(btns, diffs, mn.difficulty)
+
+func _refresh_diff_btns(btns: Array, diffs: Array, active: String) -> void:
+	for i in btns.size():
+		var b := btns[i] as Button
+		b.modulate = Color(1.4, 1.4, 1.4) if diffs[i] == active else Color(0.6, 0.6, 0.6)
 
 func _on_generate() -> void:
 	_main().show_generation()

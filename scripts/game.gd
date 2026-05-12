@@ -202,6 +202,11 @@ func _do_ready_async() -> void:
 	_build_minimap()
 	await get_tree().process_frame
 	_init_fog()
+	# Apply difficulty to starting conditions
+	var _diff := (_main().get("difficulty") as String) if _main().has_method("get") else "normal"
+	match _diff:
+		"easy": supplies = 375; wave_timer = 60.0
+		"hard": supplies = 225; wave_timer = 40.0
 	game_active = true
 	_set_status("DEFEND THE NEIGHBORHOOD  |  TAP TO SELECT AND COMMAND")
 	if not FileAccess.file_exists("user://tutorial_done"):
@@ -1932,7 +1937,10 @@ func _update_wave(delta: float) -> void:
 				_flash_wave_clear(wave_num)
 	if wave_timer <= 0.0 and wave_num < WAVE_DEFS.size():
 		_launch_wave()
-		wave_timer = 50.0
+		match (_main().get("difficulty") as String):
+			"easy": wave_timer = 60.0
+			"hard": wave_timer = 40.0
+			_:      wave_timer = 50.0
 	elif wave_num >= WAVE_DEFS.size():
 		var enemies_left := units.filter(func(u): return (u as Unit) != null and (u as Unit).team == "enemy" and (u as Unit).hp > 0)
 		if enemies_left.is_empty():
@@ -1952,16 +1960,31 @@ func _find_road_near(wx: float, wz: float, max_r: int = 5) -> Vector3:
 	return Vector3(wx, 0.0, wz)
 
 func _launch_wave() -> void:
-	var kinds: Array = WAVE_DEFS[wave_num]
+	var base_kinds: Array = WAVE_DEFS[wave_num].duplicate()
 	wave_num += 1
+	# Wave variance: randomly add or remove one soldier
+	var diff := _main().get("difficulty") as String
+	var variance: int = _rng.randi_range(-1, 1)
+	if diff == "easy":   variance -= 1
+	elif diff == "hard": variance += 1
+	if variance > 0:
+		base_kinds.append("soldier")
+	elif variance < 0 and base_kinds.size() > 2:
+		base_kinds.remove_at(_rng.randi() % base_kinds.size())
 	Sounds.play("wave_alarm", 0.0)
 	_set_status("ENEMY ADVANCE — WAVE %d INCOMING!" % wave_num)
 	_flash_wave_banner(wave_num)
 	# Later waves attack from more edges: wave 1-2 = 1 edge, 3-4 = 2, 5 = 3
 	var edge_count: int = 1 + (wave_num - 1) / 2
-	for i in kinds.size():
+	for i in base_kinds.size():
 		var sp := _wave_spawn_pos(i % edge_count)
-		var u := spawn_unit(str(kinds[i]), "enemy", sp.x, sp.z)
+		var u := spawn_unit(str(base_kinds[i]), "enemy", sp.x, sp.z)
+		if u != null:
+			# Difficulty HP scaling
+			if diff == "easy":
+				u.hp = int(float(u.hp) * 0.75); u.hp_max = u.hp
+			elif diff == "hard":
+				u.hp = int(float(u.hp) * 1.25); u.hp_max = u.hp
 		_unit_flanks[u] = _rng.randf_range(-0.55, 0.55)
 
 func _wave_spawn_pos(edge: int) -> Vector3:
