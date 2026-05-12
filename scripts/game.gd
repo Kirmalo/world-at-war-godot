@@ -187,12 +187,20 @@ var _rng := RandomNumberGenerator.new()
 
 func _ready() -> void:
 	_rng.seed = hash(str(_main().active_lat) + str(_main().active_lon))
+	_do_ready_async()
+
+func _do_ready_async() -> void:
+	# Yield between phases so mobile doesn't hard-freeze on a single long frame.
+	# The main.tscn fade overlay is black during this time, so the yields are invisible.
 	_build_world()
+	await get_tree().process_frame
 	_init_capture_points()
+	await get_tree().process_frame
 	_setup_hud()
 	_build_pause_menu()
 	_build_marquee()
 	_build_minimap()
+	await get_tree().process_frame
 	_init_fog()
 	game_active = true
 	_set_status("DEFEND THE NEIGHBORHOOD  |  TAP TO SELECT AND COMMAND")
