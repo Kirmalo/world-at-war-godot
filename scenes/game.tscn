@@ -150,17 +150,17 @@ theme_override_constants/separation = 8
 [node name="MoveBtn" type="Button" parent="HUD/UnitInfo/ModeBar"]
 text = "MOVE"
 theme_override_font_sizes/font_size = 18
-custom_minimum_size = Vector2(90, 0)
+custom_minimum_size = Vector2(90, 44)
 
 [node name="AtkBtn" type="Button" parent="HUD/UnitInfo/ModeBar"]
 text = "ATTACK"
 theme_override_font_sizes/font_size = 18
-custom_minimum_size = Vector2(90, 0)
+custom_minimum_size = Vector2(90, 44)
 
 [node name="HoldBtn" type="Button" parent="HUD/UnitInfo/ModeBar"]
 text = "HOLD"
 theme_override_font_sizes/font_size = 18
-custom_minimum_size = Vector2(90, 0)
+custom_minimum_size = Vector2(90, 44)
 
 [node name="EndgamePanel" type="ColorRect" parent="HUD"]
 anchor_right = 1.0

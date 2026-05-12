@@ -142,6 +142,7 @@ var _mortar_btn:  Button = null
 var _retreat_btn:     Button           = null
 var _vet_star_nodes:  Dictionary       = {}    # Unit -> Node3D star indicator
 var _grenade_cursor:  MeshInstance3D   = null  # AoE preview circle in grenade mode
+var _is_touch_device: bool             = false
 var _mm_cp_dots:      Array            = []    # ColorRect dots for CP ownership on minimap
 var _mg_deploy_timers: Dictionary      = {}    # Unit -> float (time until MG can fire after stopping)
 var _squad_speed: Dictionary = {}  # Unit -> float  (governed speed during group move)
@@ -187,7 +188,7 @@ func _ready() -> void:
 	_build_minimap()
 	_init_fog()
 	game_active = true
-	_set_status("DEFEND THE NEIGHBORHOOD  |  TAP TO SELECT  |  RIGHT-CLICK TO COMMAND")
+	_set_status("DEFEND THE NEIGHBORHOOD  |  TAP TO SELECT AND COMMAND")
 
 # ── WORLD BUILDING ────────────────────────────────────────────
 
@@ -1402,7 +1403,7 @@ func _order_garrison(tile: Vector2i) -> void:
 		u.garrison_pending = tile   # set AFTER _move_with_path (which clears it)
 		filled += 1
 	if filled > 0:
-		_set_status("MOVING TO %s — %d UNIT(S)  |  RIGHT-CLICK TO CANCEL" % [label, filled])
+		_set_status("MOVING TO %s — %d UNIT(S)  |  TAP ✕ TO CANCEL" % [label, filled])
 	else:
 		_set_status("NO ELIGIBLE UNITS TO GARRISON")
 
@@ -1862,9 +1863,9 @@ func _attach_weapon(skeleton: Skeleton3D, kind: String) -> void:
 func _process(delta: float) -> void:
 	_update_camera(delta)
 	_update_minimap()
-	# Grenade AoE cursor tracks mouse in grenade mode
+	# Grenade AoE cursor tracks mouse in grenade mode (hidden on touch devices)
 	if _grenade_cursor:
-		var in_grenade := cur_mode == "grenade" and game_active and not game_paused
+		var in_grenade := cur_mode == "grenade" and game_active and not game_paused and not _is_touch_device
 		_grenade_cursor.visible = in_grenade
 		if in_grenade:
 			var mp := get_viewport().get_mouse_position()
@@ -2863,6 +2864,11 @@ func _on_minimap_click(event: InputEvent) -> void:
 		if e.button_index == MOUSE_BUTTON_LEFT and e.pressed:
 			var world := _mm_s2w(e.position)
 			cam_target.x = world.x; cam_target.z = world.z
+	elif event is InputEventScreenTouch:
+		var e := event as InputEventScreenTouch
+		if e.pressed:
+			var world := _mm_s2w(e.position)
+			cam_target.x = world.x; cam_target.z = world.z
 
 func _mm_w2s(world: Vector3) -> Vector2:
 	return Vector2((world.x + HALF) / (HALF*2.0), (world.z + HALF) / (HALF*2.0)) * MM_SIZE
@@ -3034,6 +3040,7 @@ func _input(event: InputEvent) -> void:
 				return
 	if game_paused: return
 	if event is InputEventScreenTouch:
+		_is_touch_device = true
 		var e := event as InputEventScreenTouch
 		if e.pressed:
 			_touches[e.index]      = e.position
@@ -3146,39 +3153,79 @@ func _handle_tap(screen_pos: Vector2) -> void:
 	if not game_active: return
 	var wp := _ground_hit(screen_pos)
 
-	# Deploy mode
+	# Deploy mode: tap green zone to place
 	if deploying_kind != "":
 		if wp != Vector3.ZERO:
 			_do_deploy(deploying_kind, wp.x, wp.z)
 		else:
-			deploying_kind = ""
+			_reset_deploy_btn(deploying_kind); deploying_kind = ""
+			_set_status("DEPLOY CANCELLED")
+		return
+
+	# Mortar mode: tap fires (right-click also works on desktop)
+	if _mortar_mode:
+		if wp != Vector3.ZERO:
+			_mortar_mode = false
+			_fire_mortar(wp)
+		else:
+			_mortar_mode = false
+			_set_status("MORTAR CANCELLED")
 		return
 
 	var tapped := _unit_at(wp)
 
 	if not sel_units.is_empty():
+		# Explicit modes set by command buttons
 		match cur_mode:
 			"move":
 				if wp != Vector3.ZERO:
-					_issue_move_group(wp)
-					cur_mode = "none"; return
+					_issue_move_group(wp); cur_mode = "none"; return
 			"attack_move":
 				if wp != Vector3.ZERO:
-					_issue_attack_move(wp)
-					cur_mode = "none"; return
+					_issue_attack_move(wp); cur_mode = "none"; return
 			"attack":
 				if tapped != null and tapped.team == "enemy":
 					for u in sel_units:
 						var su := u as Unit
 						if su: su.state = Unit.State.ATTACKING
 					_set_status("ENGAGING TARGET"); return
+			"grenade":
+				if sel_unit != null and sel_unit.hp > 0 and wp != Vector3.ZERO:
+					_fire_grenade(sel_unit, wp)
+				cur_mode = "none"; return
 
-	if tapped != null and tapped.team == "player":
-		_select_unit(tapped)
+		# Context-sensitive smart tap — the primary mobile command path
+		if tapped != null and tapped.team == "player":
+			# Tap allied unit → add/remove from selection
+			_toggle_unit_select(tapped); return
+		if tapped != null and tapped.team == "enemy":
+			# Tap enemy → engage all selected units
+			for u in sel_units:
+				var su := u as Unit
+				if su and su.hp > 0: su.state = Unit.State.ATTACKING
+			_set_status("ENGAGING"); return
+		if wp != Vector3.ZERO:
+			# Tap world → garrison or move
+			var used := false
+			for cp in capture_points:
+				var cp_pos := Vector3(float(cp.x), 0.0, float(cp.z))
+				if wp.distance_to(cp_pos) < 2.8:
+					_order_garrison(cp["tile"] as Vector2i)
+					used = true; break
+			if not used:
+				var hit_r := clampi(int((wp.z + HALF) / TCELL), 0, TG - 1)
+				var hit_c := clampi(int((wp.x + HALF) / TCELL), 0, TG - 1)
+				if tmap[hit_r][hit_c] == TILE_BUILDING:
+					_order_garrison(Vector2i(hit_r, hit_c))
+				else:
+					_issue_move_group(wp)
 		return
 
-	if tapped == null:
-		_deselect()
+	# Nothing selected — tap unit to select
+	if tapped != null and tapped.team == "player":
+		_select_unit(tapped); return
+
+	_deselect()
 
 func _unit_at(world_pos: Vector3) -> Unit:
 	if world_pos == Vector3.ZERO: return null
@@ -3202,7 +3249,7 @@ func _select_unit(u: Unit) -> void:
 	cur_mode = "none"
 	Sounds.play("click", -12.0)
 	_update_unit_info()
-	_set_status("SELECTED: %s  |  RIGHT-CLICK TO MOVE/ATTACK" % UNIT_DEFS[u.kind].name)
+	_set_status("SELECTED: %s  |  TAP TO MOVE OR ATTACK" % UNIT_DEFS[u.kind].name)
 
 func _deselect() -> void:
 	for s in sel_units:
@@ -3211,6 +3258,41 @@ func _deselect() -> void:
 	sel_units.clear()
 	sel_unit = null; cur_mode = "none"
 	_update_unit_info()
+
+func _toggle_unit_select(u: Unit) -> void:
+	if sel_units.has(u):
+		u.set_selected(false)
+		sel_units.erase(u)
+		if sel_units.is_empty():
+			sel_unit = null; cur_mode = "none"
+		else:
+			sel_unit = sel_units[sel_units.size() - 1] as Unit
+		_update_unit_info()
+	else:
+		u.set_selected(true)
+		sel_units.append(u)
+		sel_unit = u
+		cur_mode = "none"
+		Sounds.play("click", -12.0)
+		_update_unit_info()
+
+func _cmd_cancel() -> void:
+	if _mortar_mode:
+		_mortar_mode = false
+		if _mortar_btn: _mortar_btn.modulate = Color(1, 1, 1)
+		_set_status("MORTAR CANCELLED")
+	elif cur_mode == "grenade":
+		cur_mode = "none"
+		_set_status("GRENADE CANCELLED")
+		_update_unit_info()
+	elif cur_mode != "none":
+		cur_mode = "none"
+		_set_status("COMMAND CANCELLED")
+	elif deploying_kind != "":
+		_reset_deploy_btn(deploying_kind); deploying_kind = ""
+		_set_status("DEPLOY CANCELLED")
+	else:
+		_deselect()
 
 func _snap_passable(pos: Vector3) -> Vector3:
 	var r := clampi(int((pos.z + HALF) / TCELL), 0, TG - 1)
@@ -3367,11 +3449,11 @@ func _finish_marquee(cur: Vector2) -> void:
 		sel_unit = sel_units[0] as Unit
 	cur_mode = "none"; _update_unit_info()
 	if sel_units.size() > 1:
-		_set_status("SELECTED %d UNITS  |  RIGHT-CLICK TO COMMAND" % sel_units.size())
+		_set_status("SELECTED %d UNITS  |  TAP TO COMMAND" % sel_units.size())
 	elif sel_units.size() == 1 and sel_unit != null:
-		_set_status("SELECTED: %s  |  RIGHT-CLICK TO MOVE/ATTACK" % UNIT_DEFS[sel_unit.kind].name)
+		_set_status("SELECTED: %s  |  TAP TO MOVE OR ATTACK" % UNIT_DEFS[sel_unit.kind].name)
 	else:
-		_set_status("DEFEND THE NEIGHBORHOOD  |  TAP TO SELECT  |  RIGHT-CLICK TO COMMAND")
+		_set_status("DEFEND THE NEIGHBORHOOD  |  TAP TO SELECT AND COMMAND")
 
 func _do_deploy(kind: String, px: float, pz: float) -> void:
 	var def: Dictionary = UNIT_DEFS[kind]
@@ -3384,7 +3466,7 @@ func _do_deploy(kind: String, px: float, pz: float) -> void:
 	spawn_unit(kind, "player", px, pz)
 	Sounds.play("deploy", -3.0)
 	# Keep deploying_kind active so player can place more without re-selecting
-	_set_status("%s DEPLOYED  |  TAP TO PLACE ANOTHER  |  RIGHT-CLICK TO CANCEL" % def.name)
+	_set_status("%s DEPLOYED  |  TAP TO PLACE ANOTHER  |  PRESS ✕ TO CANCEL" % def.name)
 
 # ── RAYCASTING ────────────────────────────────────────────────
 
@@ -3433,21 +3515,30 @@ func _setup_hud() -> void:
 	var ab := Button.new()
 	ab.name = "AbilityBtn"
 	ab.add_theme_font_size_override("font_size", 16)
-	ab.custom_minimum_size = Vector2(130, 0)
+	ab.custom_minimum_size = Vector2(130, 44)
 	ab.visible = false
 	ab.pressed.connect(func()->void: Sounds.play("click",-8.0); _use_ability())
 	$HUD/UnitInfo/ModeBar.add_child(ab)
 	_ability_btn = ab
-	# Retreat button (always visible in ModeBar)
+	# Retreat button
 	var rbt := Button.new()
 	rbt.name = "RetreatBtn"
 	rbt.text = "RETREAT"
 	rbt.add_theme_font_size_override("font_size", 16)
-	rbt.custom_minimum_size = Vector2(90, 0)
+	rbt.custom_minimum_size = Vector2(90, 44)
 	rbt.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
 	rbt.pressed.connect(func()->void: Sounds.play("click",-8.0); _cmd_retreat())
 	$HUD/UnitInfo/ModeBar.add_child(rbt)
 	_retreat_btn = rbt
+	# Cancel button — always last in ModeBar, dismisses any active mode or selection
+	var cxb := Button.new()
+	cxb.name = "CancelBtn"
+	cxb.text = "✕"
+	cxb.add_theme_font_size_override("font_size", 22)
+	cxb.custom_minimum_size = Vector2(44, 44)
+	cxb.add_theme_color_override("font_color", Color(1.0, 0.35, 0.35))
+	cxb.pressed.connect(func()->void: Sounds.play("click",-10.0); _cmd_cancel())
+	$HUD/UnitInfo/ModeBar.add_child(cxb)
 	# Mortar strike button in TopBar
 	var mb := Button.new()
 	mb.name = "MortarBtn"
@@ -3486,14 +3577,14 @@ func _setup_hud() -> void:
 func _cmd_move() -> void:
 	if not sel_units.is_empty():
 		cur_mode = "move"
-		_set_status("MOVE MODE — RIGHT-CLICK DESTINATION")
+		_set_status("MOVE MODE — TAP DESTINATION")
 	else:
 		_set_status("SELECT A UNIT FIRST")
 
 func _cmd_attack() -> void:
 	if not sel_units.is_empty():
 		cur_mode = "attack"
-		_set_status("ATTACK MODE — RIGHT-CLICK ENEMY")
+		_set_status("ATTACK MODE — TAP ENEMY")
 	else:
 		_set_status("SELECT A UNIT FIRST")
 
@@ -3540,7 +3631,7 @@ func _ability_grenadier(u: Unit) -> void:
 		_set_status("GRENADE CANCELLED")
 	else:
 		cur_mode = "grenade"
-		_set_status("THROW GRENADE — RIGHT-CLICK TARGET  |  PRESS AGAIN TO CANCEL")
+		_set_status("THROW GRENADE — TAP TARGET  |  PRESS AGAIN TO CANCEL")
 	_update_unit_info()
 
 func _ability_sniper(u: Unit) -> void:
@@ -3662,7 +3753,7 @@ func _start_deploy(kind: String) -> void:
 			btn.modulate = Color(1.55, 1.55, 1.55)
 			break
 	var def: Dictionary = UNIT_DEFS[kind]
-	_set_status("DEPLOY %s (%d SUPPLIES) — TAP GREEN ZONE  |  RIGHT-CLICK TO CANCEL" % [def.name, def.cost])
+	_set_status("DEPLOY %s (%d SUPPLIES) — TAP GREEN ZONE  |  PRESS ✕ TO CANCEL" % [def.name, def.cost])
 
 func _reset_deploy_btn(kind: String) -> void:
 	for btn in deploy_panel.get_children():
@@ -4037,7 +4128,7 @@ func _cmd_mortar() -> void:
 	if supplies < 60:
 		_set_status("NOT ENOUGH SUPPLIES — MORTAR COSTS 60 SUP"); return
 	_mortar_mode = true
-	_set_status("MORTAR STRIKE — RIGHT-CLICK TARGET  |  PRESS AGAIN TO CANCEL")
+	_set_status("MORTAR STRIKE — TAP TARGET  |  PRESS AGAIN TO CANCEL")
 
 func _fire_mortar(pos: Vector3) -> void:
 	supplies -= 60
