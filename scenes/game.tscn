@@ -190,6 +190,12 @@ theme_override_colors/font_color = Color(0.85, 0.85, 0.85, 1)
 horizontal_alignment = 1
 autowrap_mode = 2
 
+[node name="PlayAgainBtn" type="Button" parent="HUD/EndgamePanel/VBox"]
+custom_minimum_size = Vector2(0, 64)
+text = "PLAY AGAIN"
+theme_override_font_sizes/font_size = 28
+theme_override_colors/font_color = Color(1.0, 0.85, 0.2, 1)
+
 [node name="ReturnBtn" type="Button" parent="HUD/EndgamePanel/VBox"]
 custom_minimum_size = Vector2(0, 64)
 text = "RETURN TO MAP"

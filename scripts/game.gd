@@ -3601,6 +3601,9 @@ func _setup_hud() -> void:
 	mb.pressed.connect(func()->void: Sounds.play("click",-6.0); _cmd_mortar())
 	$HUD/TopBar.add_child(mb)
 	_mortar_btn = mb
+	var play_again_btn := $HUD/EndgamePanel/VBox/PlayAgainBtn as Button
+	if play_again_btn:
+		play_again_btn.pressed.connect(func()->void: Sounds.play("click"); _main().show_generation())
 	var ret_btn := $HUD/EndgamePanel/VBox/ReturnBtn as Button
 	if ret_btn:
 		ret_btn.pressed.connect(func()->void: _main().show_globe())
