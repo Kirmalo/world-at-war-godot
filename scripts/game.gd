@@ -156,6 +156,8 @@ var _mm_cam_rect: ColorRect   = null
 var _mm_dots:     Dictionary  = {}
 var _suppression_overlay: ColorRect = null
 var _wave_clear_notified: int = 0
+var _env_ref: Environment    = null
+var _on_mobile: bool         = false
 
 # Tutorial
 var _tut_layer:  CanvasLayer = null
@@ -352,7 +354,7 @@ func _setup_environment() -> void:
 	env.adjustment_saturation  = 0.82
 
 	# ── Mobile render tier — strip expensive effects on handheld ──
-	var _on_mobile := OS.has_feature("mobile") or OS.get_name() in ["Android", "iOS"]
+	_on_mobile = OS.has_feature("mobile") or OS.get_name() in ["Android", "iOS"]
 	if _on_mobile:
 		env.sdfgi_enabled          = false   # biggest win, GPU-intensive voxel GI
 		env.ssr_enabled            = false   # screen-space reflections off
@@ -363,6 +365,10 @@ func _setup_environment() -> void:
 		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 		get_viewport().msaa_3d     = Viewport.MSAA_DISABLED
 
+	_env_ref = env
+	# Apply saved graphics quality on desktop (mobile tier already applied above)
+	if not _on_mobile and not _load_gfx_setting():
+		_set_graphics_quality(false)
 	var we := $WorldEnvironment as WorldEnvironment
 	if we: we.environment = env
 
@@ -3970,19 +3976,90 @@ func _build_settings_panel_ctrl() -> Control:
 	var vbox := _styled_panel(c, 4)
 	var t := _pause_label("SETTINGS", 32, Color(0.30, 1.00, 0.43)); vbox.add_child(t)
 	vbox.add_child(_pause_sep(0.75))
-	# Fullscreen toggle
-	vbox.add_child(_settings_row("FULLSCREEN",
-		DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN,
-		func(on: bool)->void:
-			DisplayServer.window_set_mode(
-				DisplayServer.WINDOW_MODE_FULLSCREEN if on else DisplayServer.WINDOW_MODE_WINDOWED)))
-	# Anti-aliasing toggle
-	vbox.add_child(_settings_row("ANTI-ALIASING", true,
-		func(on: bool)->void: get_viewport().msaa_3d = Viewport.MSAA_4X if on else Viewport.MSAA_DISABLED))
+
+	# Volume slider
+	var vol_row := HBoxContainer.new()
+	vol_row.add_theme_constant_override("separation", 12)
+	var vol_lbl := Label.new(); vol_lbl.text = "VOLUME"
+	vol_lbl.add_theme_font_size_override("font_size", 18)
+	vol_lbl.add_theme_color_override("font_color", Color(0.72, 0.88, 0.72))
+	vol_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vol_row.add_child(vol_lbl)
+	var vol_val := Label.new()
+	vol_val.add_theme_font_size_override("font_size", 16)
+	vol_val.add_theme_color_override("font_color", Color(0.55, 0.85, 0.55))
+	vol_val.custom_minimum_size = Vector2(50, 0)
+	vol_val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	var vol_sl := HSlider.new()
+	vol_sl.min_value = -40.0; vol_sl.max_value = 0.0; vol_sl.step = 2.0
+	vol_sl.value = Sounds.master_volume_db
+	vol_val.text = "%d dB" % int(Sounds.master_volume_db)
+	vol_sl.custom_minimum_size = Vector2(120, 0)
+	vol_sl.value_changed.connect(func(v: float)->void:
+		Sounds.set_master_volume(v)
+		vol_val.text = "%d dB" % int(v)
+	)
+	vol_row.add_child(vol_sl)
+	vol_row.add_child(vol_val)
+	vbox.add_child(vol_row)
+
+	# Graphics quality toggle (hidden on mobile — already on low tier)
+	var on_mobile := OS.has_feature("mobile") or OS.get_name() in ["Android", "iOS"]
+	if not on_mobile:
+		var hi_gfx: bool = _load_gfx_setting()
+		vbox.add_child(_settings_row("HIGH GRAPHICS", hi_gfx,
+			func(on: bool)->void: _set_graphics_quality(on)))
+		# Fullscreen toggle
+		vbox.add_child(_settings_row("FULLSCREEN",
+			DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN,
+			func(on: bool)->void:
+				DisplayServer.window_set_mode(
+					DisplayServer.WINDOW_MODE_FULLSCREEN if on else DisplayServer.WINDOW_MODE_WINDOWED)))
+		# Anti-aliasing
+		vbox.add_child(_settings_row("ANTI-ALIASING",
+			get_viewport().msaa_3d != Viewport.MSAA_DISABLED,
+			func(on: bool)->void: get_viewport().msaa_3d = Viewport.MSAA_4X if on else Viewport.MSAA_DISABLED))
+
 	vbox.add_child(_pause_sep(0.35))
 	var back := _pmenu_btn("◀   BACK"); vbox.add_child(back)
 	back.pressed.connect(_close_settings)
 	return c
+
+func _load_gfx_setting() -> bool:
+	if not FileAccess.file_exists("user://settings.json"): return true
+	var f := FileAccess.open("user://settings.json", FileAccess.READ)
+	if f == null: return true
+	var j := JSON.new()
+	var hi := true
+	if j.parse(f.get_as_text()) == OK:
+		var d = j.get_data()
+		if d is Dictionary: hi = bool(d.get("high_graphics", true))
+	f.close()
+	return hi
+
+func _set_graphics_quality(high: bool) -> void:
+	if _env_ref != null:
+		_env_ref.sdfgi_enabled          = high
+		_env_ref.ssr_enabled            = high
+		_env_ref.ssil_enabled           = high
+		_env_ref.volumetric_fog_enabled = high
+		_env_ref.glow_enabled           = high
+	get_viewport().msaa_3d = Viewport.MSAA_2X if high else Viewport.MSAA_DISABLED
+	# Persist
+	var existing: Dictionary = {}
+	if FileAccess.file_exists("user://settings.json"):
+		var rf := FileAccess.open("user://settings.json", FileAccess.READ)
+		if rf != null:
+			var j := JSON.new()
+			if j.parse(rf.get_as_text()) == OK:
+				var d = j.get_data()
+				if d is Dictionary: existing = d
+			rf.close()
+	existing["high_graphics"] = high
+	var wf := FileAccess.open("user://settings.json", FileAccess.WRITE)
+	if wf != null:
+		wf.store_string(JSON.stringify(existing))
+		wf.close()
 
 # ── Panel helpers ─────────────────────────────────────────────
 

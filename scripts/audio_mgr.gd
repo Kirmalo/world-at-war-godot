@@ -6,11 +6,44 @@ extends Node
 const RATE := 44100
 
 var _cache: Dictionary = {}
+var master_volume_db: float = 0.0
 
 func _ready() -> void:
+	_load_volume()
 	# Pre-generate everything so first combat has no stutter
 	for s in ["shot_rifle","shot_mg","shot_sniper","explode","click","death","wave_alarm","victory","defeat","heal","capture","capture_lost","deploy","hq_alarm"]:
 		_cache[s] = _gen(s)
+
+func set_master_volume(db: float) -> void:
+	master_volume_db = clampf(db, -40.0, 0.0)
+	_save_volume()
+
+func _load_volume() -> void:
+	if not FileAccess.file_exists("user://settings.json"): return
+	var f := FileAccess.open("user://settings.json", FileAccess.READ)
+	if f == null: return
+	var j := JSON.new()
+	if j.parse(f.get_as_text()) == OK:
+		var d = j.get_data()
+		if d is Dictionary:
+			master_volume_db = clampf(float(d.get("volume_db", 0.0)), -40.0, 0.0)
+	f.close()
+
+func _save_volume() -> void:
+	var existing: Dictionary = {}
+	if FileAccess.file_exists("user://settings.json"):
+		var rf := FileAccess.open("user://settings.json", FileAccess.READ)
+		if rf != null:
+			var j := JSON.new()
+			if j.parse(rf.get_as_text()) == OK:
+				var d = j.get_data()
+				if d is Dictionary: existing = d
+			rf.close()
+	existing["volume_db"] = master_volume_db
+	var wf := FileAccess.open("user://settings.json", FileAccess.WRITE)
+	if wf != null:
+		wf.store_string(JSON.stringify(existing))
+		wf.close()
 
 # ── Public API ────────────────────────────────────────────────
 
@@ -29,7 +62,7 @@ func _emit(samples: PackedFloat32Array, vol_db: float) -> void:
 	gen.buffer_length = dur + 0.08
 	var player := AudioStreamPlayer.new()
 	player.stream    = gen
-	player.volume_db = vol_db
+	player.volume_db = vol_db + master_volume_db
 	# Add to root so scene switches don't cut off playing sounds
 	get_tree().root.add_child(player)
 	player.play()
