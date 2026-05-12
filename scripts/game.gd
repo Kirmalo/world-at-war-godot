@@ -158,6 +158,8 @@ var _suppression_overlay: ColorRect = null
 var _wave_clear_notified: int = 0
 var _env_ref: Environment    = null
 var _on_mobile: bool         = false
+var _elapsed_sec: float      = 0.0
+var _units_lost: int         = 0
 
 # Tutorial
 var _tut_layer:  CanvasLayer = null
@@ -1915,6 +1917,7 @@ func _process(delta: float) -> void:
 			if wp != Vector3.ZERO:
 				_grenade_cursor.position = Vector3(wp.x, 0.05, wp.z)
 	if not game_active or game_paused: return
+	_elapsed_sec += delta
 	_update_wave(delta)
 	_update_units(delta)
 	_update_fog()
@@ -2024,6 +2027,8 @@ func _update_units(delta: float) -> void:
 			kill_count += 1
 			supplies += 10
 			_spawn_kill_popup(unit.global_position)
+		else:
+			_units_lost += 1
 		if unit.garrisoned:
 			_garrison_remove(unit)
 			unit.garrisoned = false
@@ -3576,15 +3581,25 @@ func _show_endgame(victory: bool) -> void:
 	panel.visible = true
 	var title := panel.get_node("VBox/Title") as Label
 	var sub   := panel.get_node("VBox/Sub")   as Label
+	# Compute stats
+	var elapsed_min := int(_elapsed_sec) / 60
+	var elapsed_s   := int(_elapsed_sec) % 60
+	var cp_held := 0
+	for cp in capture_points:
+		if cp.get("owner") == "player": cp_held += 1
 	if victory:
 		title.text     = "NEIGHBORHOOD DEFENDED!"
 		title.modulate = Color(0.3, 1.0, 0.43)
-		sub.text       = "All %d waves repelled.  KIA: %d" % [WAVE_DEFS.size(), kill_count]
+		sub.text       = ("Waves repelled: %d / %d\nEnemy KIA: %d   Defenders lost: %d\nCPs held: %d / %d   Supplies: %d   Time: %d:%02d"
+			% [WAVE_DEFS.size(), WAVE_DEFS.size(), kill_count, _units_lost,
+			   cp_held, capture_points.size(), supplies, elapsed_min, elapsed_s])
 	else:
 		title.text     = "THE NEIGHBORHOOD HAS FALLEN"
 		title.modulate = Color(1.0, 0.3, 0.2)
 		var reason: String = "HQ destroyed." if hq_hp <= 0 else "Last defender fell."
-		sub.text       = "%s  KIA: %d  Supplies remaining: %d" % [reason, kill_count, supplies]
+		sub.text       = ("%s\nWave %d / %d reached   Enemy KIA: %d   Defenders lost: %d\nCPs held: %d / %d   Supplies: %d   Time: %d:%02d"
+			% [reason, wave_num, WAVE_DEFS.size(), kill_count, _units_lost,
+			   cp_held, capture_points.size(), supplies, elapsed_min, elapsed_s])
 
 # ── HUD ───────────────────────────────────────────────────────
 
