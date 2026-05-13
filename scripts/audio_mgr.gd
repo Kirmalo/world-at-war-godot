@@ -7,15 +7,50 @@ const RATE := 44100
 
 var _cache: Dictionary = {}
 var master_volume_db: float = 0.0
+var _ambient_player: AudioStreamPlayer = null
 
 func _ready() -> void:
 	_load_volume()
 	# Pre-generate everything so first combat has no stutter
 	for s in ["shot_rifle","shot_mg","shot_sniper","explode","click","death","wave_alarm","victory","defeat","heal","capture","capture_lost","deploy","hq_alarm"]:
 		_cache[s] = _gen(s)
+	_start_ambient()
+
+func _start_ambient() -> void:
+	var samples := _gen_ambient()
+	if samples.is_empty(): return
+	var gen := AudioStreamGenerator.new()
+	gen.mix_rate      = float(RATE)
+	gen.buffer_length = float(samples.size()) / float(RATE) + 0.1
+	_ambient_player = AudioStreamPlayer.new()
+	_ambient_player.stream    = gen
+	_ambient_player.volume_db = -28.0 + master_volume_db
+	get_tree().root.add_child(_ambient_player)
+	_ambient_player.play()
+	var pb := _ambient_player.get_stream_playback() as AudioStreamGeneratorPlayback
+	if pb:
+		for i in samples.size():
+			pb.push_frame(Vector2(samples[i], samples[i]))
+	# Loop by restarting when playback ends
+	_ambient_player.finished.connect(func()->void: _restart_ambient())
+
+func _restart_ambient() -> void:
+	if not is_instance_valid(_ambient_player): return
+	var pb := _ambient_player.get_stream_playback() as AudioStreamGeneratorPlayback
+	if pb == null: return
+	var samples := _gen_ambient()
+	for i in samples.size():
+		pb.push_frame(Vector2(samples[i], samples[i]))
+	_ambient_player.play()
+
+func set_ambient_volume(db: float) -> void:
+	if is_instance_valid(_ambient_player):
+		_ambient_player.volume_db = clampf(db, -60.0, 0.0)
 
 func set_master_volume(db: float) -> void:
 	master_volume_db = clampf(db, -40.0, 0.0)
+	if is_instance_valid(_ambient_player):
+		_ambient_player.volume_db = -28.0 + master_volume_db
 	_save_volume()
 
 func _load_volume() -> void:
@@ -240,6 +275,28 @@ func _deploy_sfx() -> PackedFloat32Array:
 		var noise := randf_range(-1.0,1.0) * exp(-t * 20.0) * 0.32
 		var tone  := sin(TAU * 430.0 * t)  * exp(-t * 42.0) * 0.26
 		s[i] = clampf(thud + noise + tone, -1.0, 1.0)
+	return s
+
+func _gen_ambient() -> PackedFloat32Array:
+	# ~8 seconds: low-frequency drone + slowly filtered wind noise
+	var dur  := 8.0
+	var n    := int(RATE * dur)
+	var s    := PackedFloat32Array(); s.resize(n)
+	# Simple one-pole low-pass filter state
+	var lp: float = 0.0
+	var alpha := 0.015   # cutoff ~200 Hz at 44100
+	for i in n:
+		var t    := float(i) / float(RATE)
+		# Drone: two detuned low sines with slow beat
+		var d1   := sin(TAU * 58.0 * t) * 0.18
+		var d2   := sin(TAU * 61.7 * t) * 0.12
+		# Wind noise: broadband filtered to low-mid
+		var raw_noise := randf_range(-1.0, 1.0)
+		lp = lp + alpha * (raw_noise - lp)
+		var wind := lp * 0.22
+		# Slow amplitude modulation simulating gusts
+		var mod := 0.55 + 0.45 * sin(TAU * 0.08 * t + 1.2)
+		s[i] = clampf((d1 + d2 + wind) * mod, -1.0, 1.0)
 	return s
 
 func _hq_alarm_sfx() -> PackedFloat32Array:
