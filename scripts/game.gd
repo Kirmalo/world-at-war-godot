@@ -273,6 +273,13 @@ func _build_world() -> void:
 			sat_mat.roughness  = 0.88
 			sat_mat.metallic   = 0.0
 			sat_mat.specular   = 0.12
+			# Depth handling: disable depth writes so the plane never competes
+			# in the prepass against the ground (y=0) or tree crown phantom
+			# depths. render_priority=1 places it after all priority-0 opaque
+			# geometry; depth testing remains active so buildings / tree leaves /
+			# roads still correctly occlude the overlay.
+			sat_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+			sat_mat.render_priority  = 1
 			var pm := PlaneMesh.new()
 			pm.size = Vector2(HALF * 2.0, HALF * 2.0)
 			pm.subdivide_width  = 4
@@ -280,7 +287,10 @@ func _build_world() -> void:
 			var sat_plane := MeshInstance3D.new()
 			sat_plane.mesh = pm
 			sat_plane.set_surface_override_material(0, sat_mat)
-			sat_plane.position = Vector3(0.0, 0.005, 0.0)
+			# y=0.01: clear of the ground top-face (y=0) so the depth test always
+			# passes over bare ground, while geometry at y≥0.02 (roads, buildings)
+			# remains correctly in front.
+			sat_plane.position = Vector3(0.0, 0.01, 0.0)
 			add_child(sat_plane)
 
 	tmap.clear()
@@ -1255,12 +1265,14 @@ func _hq_zone(pos: Vector3, color: Color, _label: String) -> void:
 func _build_road_mask() -> void:
 	# Generate a TG×TG road-presence texture and pass it to the ground shader
 	# so ground.gdshader can darken the soil near roads.
+	# FORMAT_RGBA8 is used rather than FORMAT_R8 for broad GPU driver compatibility;
+	# the shader samples only .r, so white road pixels (1,1,1,1) work correctly.
 	if _ground_mat == null: return
-	var img := Image.create(TG, TG, false, Image.FORMAT_R8)
+	var img := Image.create(TG, TG, false, Image.FORMAT_RGBA8)
 	for r in TG:
 		for c in TG:
 			if tmap[r][c] == TILE_ROAD:
-				img.set_pixel(c, r, Color(1.0, 0.0, 0.0))
+				img.set_pixel(c, r, Color(1.0, 1.0, 1.0, 1.0))
 	_ground_mat.set_shader_parameter("road_mask", ImageTexture.create_from_image(img))
 
 ## Recursively apply a damage level [0..1] to all _SHADER_BUILDING materials
