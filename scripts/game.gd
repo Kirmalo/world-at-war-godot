@@ -17,6 +17,7 @@ const _SHADER_WATER        := preload("res://shaders/water.gdshader")
 const _SHADER_TREE_CROWN   := preload("res://shaders/tree_crown.gdshader")
 const _SHADER_TREE_CONIFER := preload("res://shaders/tree_conifer.gdshader")
 const _SHADER_ZONE_PULSE   := preload("res://shaders/zone_pulse.gdshader")
+const _SHADER_FOG          := preload("res://shaders/fog.gdshader")
 
 # ── UNIT DEFINITIONS ──────────────────────────────────────────
 # Player units are MILITIA — local defenders, cheap, weaker individually
@@ -205,6 +206,18 @@ var _sat_img: Image = null          # decoded satellite for tree-type inference
 var _tree_mats: Dictionary = {}     # tree_type -> ShaderMaterial (shared per type)
 var _bld_mats:  Dictionary = {}     # bld_type  -> StandardMaterial3D (cached per type)
 
+# Effect material / mesh / particle cache — initialised once in _ready(), reused every shot
+var _mat_muzzle:     StandardMaterial3D      = null
+var _mat_tracer:     StandardMaterial3D      = null
+var _mat_expl_flash: StandardMaterial3D      = null
+var _mat_expl_ring:  StandardMaterial3D      = null
+var _mesh_muzzle:    SphereMesh              = null
+var _spark_ppm:      ParticleProcessMaterial = null
+var _smoke_ppm:      ParticleProcessMaterial = null
+var _spark_mesh:     SphereMesh              = null
+var _smoke_mesh:     SphereMesh              = null
+var _decal_tex:      ImageTexture            = null
+
 # RNG seeded per-map
 var _rng := RandomNumberGenerator.new()
 
@@ -225,6 +238,7 @@ func _do_ready_async() -> void:
 	_build_minimap()
 	await get_tree().process_frame
 	_init_fog()
+	_init_effect_mats()
 	# Apply difficulty to starting conditions
 	var _diff := (_main().get("difficulty") as String) if _main().has_method("get") else "normal"
 	match _diff:
@@ -2094,19 +2108,39 @@ func _update_units(delta: float) -> void:
 func _death_effect(unit: Unit) -> void:
 	Sounds.play_at("death", unit.global_position, -8.0)
 	unit.set_selected(false)
-	var pos  := unit.global_position
-	var team := unit.team
+	var pos   := unit.global_position
+	var rot_y := unit.rotation.y
+	var team  := unit.team
 	# _unit_aps is already erased before this call; look up AP directly from the tree
 	var ap := _find_unit_ap(unit)
 	if ap:
 		_play_unit_anim(ap, ["general/Death_A", "general/Death_B"])
 		ap.speed_scale = 1.8
-	var tw := create_tween().set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-	tw.tween_interval(0.30)
-	tw.tween_property(unit, "scale", Vector3(0.0, 0.0, 0.0), 0.22)
+	# Drop-prone: tip forward and sink below ground level, then free
+	var tw := create_tween().set_parallel(true).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tw.tween_property(unit, "rotation:x", PI * 0.48, 0.38)
+	tw.tween_property(unit, "position:y", -0.18, 0.38)
 	await tw.finished
 	if is_instance_valid(unit): unit.queue_free()
 	_spawn_body(pos, team)
+	# Lingering prone silhouette — flat BoxMesh that fades over 4 s
+	var sil_col := Color(0.26, 0.20, 0.15) if team == "player" else Color(0.14, 0.20, 0.10)
+	var sil_mat := StandardMaterial3D.new()
+	sil_mat.albedo_color = Color(sil_col.r, sil_col.g, sil_col.b, 0.72)
+	sil_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sil_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	var sil_box := BoxMesh.new()
+	sil_box.size = Vector3(0.52, 0.06, 1.48)
+	var sil := MeshInstance3D.new()
+	sil.mesh = sil_box
+	sil.set_surface_override_material(0, sil_mat)
+	sil.position = Vector3(pos.x, 0.04, pos.z)
+	sil.rotation.y = rot_y
+	add_child(sil)
+	var fade := create_tween()
+	fade.tween_interval(2.0)
+	fade.tween_property(sil_mat, "albedo_color:a", 0.0, 2.0)
+	fade.tween_callback(sil.queue_free)
 	# Attrition defeat: waves started, no player units, can't afford cheapest
 	if wave_num > 0 and game_active:
 		var alive := false
@@ -2749,12 +2783,8 @@ func _flash_hit(u: Unit) -> void:
 
 func _spawn_explosion(pos: Vector3) -> void:
 	Sounds.play_at("explode", pos, -2.0)
-	# Flash sphere
-	var fmat := StandardMaterial3D.new()
-	fmat.albedo_color = Color(1.0, 0.78, 0.28, 0.95)
-	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	fmat.emission_enabled = true; fmat.emission = Color(1.0, 0.5, 0.05) * 5.0
+	# Flash sphere — duplicate cached base so alpha tween is per-instance
+	var fmat := _mat_expl_flash.duplicate() as StandardMaterial3D
 	var sm := SphereMesh.new(); sm.radius = 0.55; sm.height = 1.1
 	sm.radial_segments = 8; sm.rings = 5
 	var sphere := MeshInstance3D.new(); sphere.mesh = sm
@@ -2764,12 +2794,8 @@ func _spawn_explosion(pos: Vector3) -> void:
 	st.tween_property(sphere, "scale", Vector3(2.8, 2.8, 2.8), 0.18).set_ease(Tween.EASE_OUT)
 	st.tween_property(fmat, "albedo_color:a", 0.0, 0.20)
 	st.finished.connect(func()->void: if is_instance_valid(sphere): sphere.queue_free())
-	# Expanding shock ring
-	var rmat := StandardMaterial3D.new()
-	rmat.albedo_color = Color(1.0, 0.6, 0.15, 0.75)
-	rmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	rmat.emission_enabled = true; rmat.emission = Color(1.0, 0.38, 0.0) * 2.0
+	# Expanding shock ring — duplicate cached base so alpha tween is per-instance
+	var rmat := _mat_expl_ring.duplicate() as StandardMaterial3D
 	var rm := TorusMesh.new(); rm.inner_radius = 0.15; rm.outer_radius = 0.45
 	rm.rings = 4; rm.ring_segments = 14
 	var ring := MeshInstance3D.new(); ring.mesh = rm
@@ -2818,50 +2844,43 @@ func _spawn_dmg_popup(pos: Vector3, dmg: int) -> void:
 	tw.finished.connect(func()->void: if is_instance_valid(lbl): lbl.queue_free())
 
 func _spawn_hit_spark(pos: Vector3) -> void:
-	for i in 6:
-		var angle: float = _rng.randf() * TAU
-		var spd: float   = _rng.randf_range(1.8, 4.2)
-		var up: float    = _rng.randf_range(0.3, 1.0)
-		var dir := Vector3(cos(angle)*spd, up*spd, sin(angle)*spd)
-		var smat := StandardMaterial3D.new()
-		smat.albedo_color   = Color(1.0, 0.35 + _rng.randf()*0.45, 0.05)
-		smat.emission_enabled = true
-		smat.emission       = smat.albedo_color * 4.0
-		smat.shading_mode   = BaseMaterial3D.SHADING_MODE_UNSHADED
-		smat.transparency   = BaseMaterial3D.TRANSPARENCY_ALPHA
-		var sz: float = _rng.randf_range(0.04, 0.09)
-		var spark := _box(Vector3(sz, sz, sz), smat)
-		spark.position = pos; add_child(spark)
-		var dur: float = _rng.randf_range(0.06, 0.16)
-		var tw := create_tween().set_parallel(true).set_ease(Tween.EASE_OUT)
-		tw.tween_property(spark, "position", pos + dir * dur, dur)
-		tw.tween_property(smat, "albedo_color:a", 0.0, dur)
-		tw.finished.connect(func()->void: if is_instance_valid(spark): spark.queue_free())
+	# GPUParticles3D — shared PPM/mesh, one node per hit
+	var gp := GPUParticles3D.new()
+	gp.amount           = 8
+	gp.lifetime         = 0.20
+	gp.one_shot         = true
+	gp.explosiveness    = 0.95
+	gp.process_material = _spark_ppm
+	gp.draw_pass_1      = _spark_mesh
+	gp.position         = pos
+	add_child(gp)
+	gp.emitting = true
+	gp.finished.connect(func()->void: if is_instance_valid(gp): gp.queue_free())
+	# Bullet-impact decal on the ground, fades over 8 s
+	var decal := Decal.new()
+	decal.size           = Vector3(0.9, 1.2, 0.9)
+	decal.texture_albedo = _decal_tex
+	decal.position       = Vector3(pos.x, 0.65, pos.z)
+	decal.albedo_mix     = 0.85
+	add_child(decal)
+	var dtw := create_tween()
+	dtw.tween_interval(6.0)
+	dtw.tween_property(decal, "albedo_mix", 0.0, 2.0)
+	dtw.tween_callback(decal.queue_free)
 
 func _spawn_smoke(pos: Vector3) -> void:
-	for i in 5:
-		var fi := float(i)
-		var smat := StandardMaterial3D.new()
-		var grey: float = 0.42 + fi * 0.06
-		smat.albedo_color = Color(grey, grey * 0.97, grey * 0.93, 0.62 - fi*0.08)
-		smat.transparency    = BaseMaterial3D.TRANSPARENCY_ALPHA
-		smat.shading_mode    = BaseMaterial3D.SHADING_MODE_UNSHADED
-		smat.billboard_mode  = BaseMaterial3D.BILLBOARD_ENABLED
-		smat.billboard_keep_scale = true
-		var r0: float = 0.22 + fi*0.10
-		var sm := SphereMesh.new()
-		sm.radius = r0; sm.height = r0 * 1.5
-		sm.radial_segments = 7; sm.rings = 5
-		var s := MeshInstance3D.new(); s.mesh = sm
-		s.set_surface_override_material(0, smat)
-		var off := Vector3(_rng.randf_range(-0.5,0.5), fi*0.28 + _rng.randf()*0.15, _rng.randf_range(-0.5,0.5))
-		s.position = pos + off + Vector3(0.0, 0.3, 0.0)
-		add_child(s)
-		var dur: float = 1.0 + fi*0.40
-		var tw := create_tween().set_parallel(true).set_ease(Tween.EASE_OUT)
-		tw.tween_property(s, "scale", Vector3(4.5, 4.5, 4.5), dur)
-		tw.tween_property(smat, "albedo_color:a", 0.0, dur).set_ease(Tween.EASE_IN)
-		tw.finished.connect(func()->void: if is_instance_valid(s): s.queue_free())
+	# GPUParticles3D — shared PPM/mesh, one node per explosion
+	var gp := GPUParticles3D.new()
+	gp.amount           = 6
+	gp.lifetime         = 2.8
+	gp.one_shot         = true
+	gp.explosiveness    = 0.80
+	gp.process_material = _smoke_ppm
+	gp.draw_pass_1      = _smoke_mesh
+	gp.position         = pos + Vector3(0.0, 0.3, 0.0)
+	add_child(gp)
+	gp.emitting = true
+	gp.finished.connect(func()->void: if is_instance_valid(gp): gp.queue_free())
 
 func _issue_attack_move(wp: Vector3) -> void:
 	var alive: Array = []
@@ -3029,15 +3048,114 @@ func _init_fog() -> void:
 	_fog_mesh.position = Vector3(0.0, 0.5, 0.0)
 	_fog_img = Image.create(TG, TG, false, Image.FORMAT_RGBA8)
 	_fog_tex = ImageTexture.create_from_image(_fog_img)
-	var mat := StandardMaterial3D.new()
-	mat.transparency    = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode    = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	var mat := ShaderMaterial.new()
+	mat.shader = _SHADER_FOG
 	mat.render_priority = 127
-	mat.texture_filter  = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-	mat.albedo_texture  = _fog_tex
+	mat.set_shader_parameter("fog_texture", _fog_tex)
 	_fog_mesh.set_surface_override_material(0, mat)
 	add_child(_fog_mesh)
+
+func _init_effect_mats() -> void:
+	# ── Muzzle flash — shared material + mesh, new MeshInstance per shot ─────
+	var mmat := StandardMaterial3D.new()
+	mmat.albedo_color     = Color(1.0, 0.92, 0.5)
+	mmat.emission_enabled = true
+	mmat.emission         = Color(1.0, 0.7, 0.2) * 4.0
+	mmat.shading_mode     = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mmat.billboard_mode   = BaseMaterial3D.BILLBOARD_ENABLED
+	_mat_muzzle = mmat
+	var mm := SphereMesh.new()
+	mm.radius = 0.22; mm.height = 0.44; mm.radial_segments = 8; mm.rings = 5
+	_mesh_muzzle = mm
+
+	# ── Tracer line — shared, size varies per shot so mesh is still per-shot ──
+	var tmat := StandardMaterial3D.new()
+	tmat.albedo_color     = Color(1.0, 0.95, 0.7, 0.55)
+	tmat.transparency     = BaseMaterial3D.TRANSPARENCY_ALPHA
+	tmat.shading_mode     = BaseMaterial3D.SHADING_MODE_UNSHADED
+	tmat.emission_enabled = true
+	tmat.emission         = Color(1.0, 0.88, 0.5) * 1.2
+	_mat_tracer = tmat
+
+	# ── Explosion base materials — .duplicate() per explosion to allow alpha tween
+	var efmat := StandardMaterial3D.new()
+	efmat.albedo_color     = Color(1.0, 0.78, 0.28, 0.95)
+	efmat.transparency     = BaseMaterial3D.TRANSPARENCY_ALPHA
+	efmat.shading_mode     = BaseMaterial3D.SHADING_MODE_UNSHADED
+	efmat.emission_enabled = true; efmat.emission = Color(1.0, 0.5, 0.05) * 5.0
+	_mat_expl_flash = efmat
+
+	var ermat := StandardMaterial3D.new()
+	ermat.albedo_color     = Color(1.0, 0.6, 0.15, 0.75)
+	ermat.transparency     = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ermat.shading_mode     = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ermat.emission_enabled = true; ermat.emission = Color(1.0, 0.38, 0.0) * 2.0
+	_mat_expl_ring = ermat
+
+	# ── Spark GPUParticles setup — shared PPM + mesh ──────────────────────────
+	var smat := StandardMaterial3D.new()
+	smat.shading_mode               = BaseMaterial3D.SHADING_MODE_UNSHADED
+	smat.albedo_color               = Color.WHITE
+	smat.transparency               = BaseMaterial3D.TRANSPARENCY_ALPHA
+	smat.vertex_color_use_as_albedo = true
+	var smesh := SphereMesh.new()
+	smesh.radius = 0.06; smesh.height = 0.12; smesh.radial_segments = 4; smesh.rings = 3
+	smesh.material = smat
+	_spark_mesh = smesh
+
+	var sg := Gradient.new()
+	sg.set_color(0, Color(1.0, 0.65, 0.1, 1.0))
+	sg.set_color(1, Color(1.0, 0.30, 0.05, 0.0))
+	var sramp := GradientTexture1D.new(); sramp.gradient = sg
+	_spark_ppm = ParticleProcessMaterial.new()
+	_spark_ppm.direction             = Vector3(0.0, 1.0, 0.0)
+	_spark_ppm.spread                = 90.0
+	_spark_ppm.initial_velocity_min  = 2.0
+	_spark_ppm.initial_velocity_max  = 5.5
+	_spark_ppm.gravity               = Vector3(0.0, -14.0, 0.0)
+	_spark_ppm.scale_min             = 0.6
+	_spark_ppm.scale_max             = 1.4
+	_spark_ppm.color_ramp            = sramp
+
+	# ── Smoke GPUParticles setup — shared PPM + mesh ──────────────────────────
+	var pmat := StandardMaterial3D.new()
+	pmat.shading_mode               = BaseMaterial3D.SHADING_MODE_UNSHADED
+	pmat.albedo_color               = Color.WHITE
+	pmat.transparency               = BaseMaterial3D.TRANSPARENCY_ALPHA
+	pmat.vertex_color_use_as_albedo = true
+	pmat.billboard_mode             = BaseMaterial3D.BILLBOARD_ENABLED
+	pmat.billboard_keep_scale       = true
+	var pmesh := SphereMesh.new()
+	pmesh.radius = 0.45; pmesh.height = 0.68; pmesh.radial_segments = 6; pmesh.rings = 4
+	pmesh.material = pmat
+	_smoke_mesh = pmesh
+
+	var pg := Gradient.new()
+	pg.set_color(0, Color(0.55, 0.52, 0.50, 0.60))
+	pg.set_color(1, Color(0.62, 0.58, 0.55, 0.0))
+	var pramp := GradientTexture1D.new(); pramp.gradient = pg
+	_smoke_ppm = ParticleProcessMaterial.new()
+	_smoke_ppm.direction             = Vector3(0.0, 1.0, 0.0)
+	_smoke_ppm.spread                = 35.0
+	_smoke_ppm.initial_velocity_min  = 0.5
+	_smoke_ppm.initial_velocity_max  = 1.4
+	_smoke_ppm.gravity               = Vector3(0.0, 0.15, 0.0)
+	_smoke_ppm.scale_min             = 0.9
+	_smoke_ppm.scale_max             = 2.2
+	_smoke_ppm.color_ramp            = pramp
+
+	# ── Bullet-impact decal texture — procedural noisy disc ───────────────────
+	var img := Image.create(32, 32, false, Image.FORMAT_RGBA8)
+	for py in 32:
+		for px in 32:
+			var dx := (float(px) - 15.5) / 15.5
+			var dy := (float(py) - 15.5) / 15.5
+			var r  := sqrt(dx * dx + dy * dy)
+			if r < 1.0:
+				var edge_r := 0.72 + 0.22 * sin(atan2(dy, dx) * 7.0)
+				var a := clampf(1.0 - clampf((r - (edge_r - 0.18)) / 0.18, 0.0, 1.0), 0.0, 0.78)
+				img.set_pixel(px, py, Color(0.05, 0.03, 0.01, a))
+	_decal_tex = ImageTexture.create_from_image(img)
 
 func _update_fog() -> void:
 	var changed := false
@@ -3100,17 +3218,10 @@ func _nearest_enemy(u: Unit, max_r: float) -> Unit:
 	return best
 
 func _spawn_muzzle(from: Vector3, to: Vector3) -> void:
-	# Muzzle flash sprite
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(1.0,0.92,0.5)
-	mat.emission_enabled = true; mat.emission = Color(1.0,0.7,0.2)*4.0
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	var fsm := SphereMesh.new()
-	fsm.radius = 0.22; fsm.height = 0.44
-	fsm.radial_segments = 8; fsm.rings = 5
-	var flash := MeshInstance3D.new(); flash.mesh = fsm
-	flash.set_surface_override_material(0, mat)
+	# Muzzle flash — cached mesh + material, new MeshInstance3D per shot only
+	var flash := MeshInstance3D.new()
+	flash.mesh = _mesh_muzzle
+	flash.set_surface_override_material(0, _mat_muzzle)
 	flash.position = from; add_child(flash)
 	get_tree().create_timer(0.06).timeout.connect(func()->void: if is_instance_valid(flash): flash.queue_free())
 	# Muzzle light — illuminates nearby geometry and units for one frame
@@ -3121,15 +3232,9 @@ func _spawn_muzzle(from: Vector3, to: Vector3) -> void:
 	mlight.position = from
 	add_child(mlight)
 	get_tree().create_timer(0.06).timeout.connect(func()->void: if is_instance_valid(mlight): mlight.queue_free())
-	# Tracer line (thin box between from and to)
-	var mid := (from+to)*0.5; var len: float = from.distance_to(to)
-	var tracer_mat := StandardMaterial3D.new()
-	tracer_mat.albedo_color = Color(1.0,0.95,0.7,0.55)
-	tracer_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	tracer_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	tracer_mat.emission_enabled = true
-	tracer_mat.emission = Color(1.0,0.88,0.5) * 1.2
-	var tracer := _box(Vector3(0.022,0.022,len), tracer_mat)
+	# Tracer line — cached material, size differs per shot so BoxMesh is still per-shot
+	var mid := (from + to) * 0.5; var len: float = from.distance_to(to)
+	var tracer := _box(Vector3(0.022, 0.022, len), _mat_tracer)
 	tracer.position = mid
 	tracer.look_at(to, Vector3.UP)
 	add_child(tracer)
