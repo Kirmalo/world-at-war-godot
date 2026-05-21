@@ -3287,6 +3287,7 @@ func _handle_tap(screen_pos: Vector2) -> void:
 			_do_deploy(deploying_kind, wp.x, wp.z)
 		else:
 			_reset_deploy_btn(deploying_kind); deploying_kind = ""
+			_set_deploy_zone(false)
 			_set_status("DEPLOY CANCELLED")
 		return
 
@@ -3418,6 +3419,7 @@ func _cmd_cancel() -> void:
 		_set_status("COMMAND CANCELLED")
 	elif deploying_kind != "":
 		_reset_deploy_btn(deploying_kind); deploying_kind = ""
+		_set_deploy_zone(false)
 		_set_status("DEPLOY CANCELLED")
 	else:
 		_deselect()
@@ -3494,6 +3496,7 @@ func _handle_right_click(screen_pos: Vector2) -> void:
 	if deploying_kind != "":
 		_reset_deploy_btn(deploying_kind)
 		deploying_kind = ""
+		_set_deploy_zone(false)
 		_set_status("DEPLOY CANCELLED"); return
 	# Mortar mode is global — doesn't require a selected unit
 	if _mortar_mode:
@@ -3710,6 +3713,14 @@ func _setup_hud() -> void:
 	mb.pressed.connect(func()->void: Sounds.play("click",-6.0); _cmd_mortar())
 	$HUD/TopBar.add_child(mb)
 	_mortar_btn = mb
+	# Unit count label — shows live player unit count next to KIA counter
+	var ucl := Label.new()
+	ucl.name = "UnitCountLbl"
+	ucl.add_theme_font_size_override("font_size", 18)
+	ucl.add_theme_color_override("font_color", Color(0.7, 1.0, 0.7))
+	ucl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	$HUD/TopBar.add_child(ucl)
+	_unit_count_lbl = ucl
 	var play_again_btn := $HUD/EndgamePanel/VBox/PlayAgainBtn as Button
 	if play_again_btn:
 		play_again_btn.pressed.connect(func()->void: Sounds.play("click"); _main().show_generation())
@@ -3738,6 +3749,26 @@ func _setup_hud() -> void:
 	_grenade_cursor.set_surface_override_material(0, gc_mat)
 	_grenade_cursor.visible = false
 	add_child(_grenade_cursor)
+	# Deploy zone: semi-transparent disc that lights up when deploy mode is active
+	var dz_mesh := CylinderMesh.new()
+	dz_mesh.top_radius    = 8.0
+	dz_mesh.bottom_radius = 8.0
+	dz_mesh.height        = 0.06
+	dz_mesh.radial_segments = 48
+	dz_mesh.rings = 1
+	var dz_mat := StandardMaterial3D.new()
+	dz_mat.albedo_color     = Color(0.30, 1.0, 0.43, 0.22)
+	dz_mat.transparency     = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dz_mat.shading_mode     = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dz_mat.depth_draw_mode  = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	dz_mat.cull_mode        = BaseMaterial3D.CULL_DISABLED
+	dz_mat.render_priority  = 1
+	_deploy_zone = MeshInstance3D.new()
+	_deploy_zone.mesh = dz_mesh
+	_deploy_zone.set_surface_override_material(0, dz_mat)
+	_deploy_zone.position = Vector3(HQ_X, 0.04, HQ_Z)
+	_deploy_zone.visible  = false
+	add_child(_deploy_zone)
 	_apply_safe_area()
 
 func _apply_safe_area() -> void:
@@ -3930,6 +3961,7 @@ func _start_deploy(kind: String) -> void:
 		# Second press on same button cancels deploy mode
 		_reset_deploy_btn(kind)
 		deploying_kind = ""
+		_set_deploy_zone(false)
 		_set_status("DEPLOY CANCELLED")
 		return
 	if deploying_kind != "":
@@ -3941,12 +3973,17 @@ func _start_deploy(kind: String) -> void:
 			btn.modulate = Color(1.55, 1.55, 1.55)
 			break
 	var def: Dictionary = UNIT_DEFS[kind]
+	_set_deploy_zone(true)
 	_set_status("DEPLOY %s (%d SUPPLIES) — TAP GREEN ZONE  |  PRESS ✕ TO CANCEL" % [def.name, def.cost])
 
 func _reset_deploy_btn(kind: String) -> void:
 	for btn in deploy_panel.get_children():
 		if btn is Button and btn.has_meta("kind") and str(btn.get_meta("kind")) == kind:
 			btn.modulate = Color(1.0, 1.0, 1.0); break
+
+func _set_deploy_zone(visible: bool) -> void:
+	if is_instance_valid(_deploy_zone):
+		_deploy_zone.visible = visible
 
 func _update_hud() -> void:
 	# Supply income rate
@@ -3968,6 +4005,14 @@ func _update_hud() -> void:
 		wave_label.modulate = Color(0.7, 1.0, 0.7)
 	kills_label.text = "KIA: %d" % kill_count
 	hq_label.text    = "HQ: %d/%d" % [hq_hp, hq_hp_max]
+	if _unit_count_lbl:
+		var alive := 0
+		for u in units:
+			var pu := u as Unit
+			if pu != null and pu.team == "player" and pu.hp > 0: alive += 1
+		_unit_count_lbl.text = "UNITS: %d" % alive
+		_unit_count_lbl.add_theme_color_override("font_color",
+			Color(0.7, 1.0, 0.7) if alive > 3 else (Color(1.0, 0.78, 0.2) if alive > 1 else Color(1.0, 0.3, 0.2)))
 	hq_label.modulate = Color(0.4,0.7,1.0) if hq_hp > 50 else (Color(1.0,0.75,0.2) if hq_hp > 25 else Color(1.0,0.3,0.2))
 	# Suppression screen tint: red vignette when selected unit is suppressed
 	if _suppression_overlay:
