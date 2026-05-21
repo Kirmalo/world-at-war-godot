@@ -28,12 +28,15 @@ void fragment() {
 	vec3 dirt_col = vec3(0.170, 0.122, 0.068) * (0.78 + n2 * 0.22);
 	albedo = mix(albedo, dirt_col, dirt * 0.58);
 
-	// Derive a cheap normal from the noise gradient for micro-surface depth
+	// Two-octave normal: coarse landscape bumps + fine-scale micro-surface detail
 	float eps = 0.008;
 	float nx = vnoise(UV * 6.0 + vec2(eps, 0.0)) - vnoise(UV * 6.0 - vec2(eps, 0.0));
 	float nz = vnoise(UV * 6.0 + vec2(0.0, eps)) - vnoise(UV * 6.0 - vec2(0.0, eps));
-	NORMAL_MAP       = normalize(vec3(nx * 4.0, nz * 4.0, 1.0)) * 0.5 + 0.5;
-	NORMAL_MAP_DEPTH = 0.35;
+	float eps2 = 0.004;
+	float nx2 = vnoise(UV * 28.0 + vec2(eps2, 0.0)) - vnoise(UV * 28.0 - vec2(eps2, 0.0));
+	float nz2 = vnoise(UV * 28.0 + vec2(0.0, eps2)) - vnoise(UV * 28.0 - vec2(0.0, eps2));
+	NORMAL_MAP       = normalize(vec3(nx * 4.0 + nx2 * 2.5, nz * 4.0 + nz2 * 2.5, 1.0)) * 0.5 + 0.5;
+	NORMAL_MAP_DEPTH = 0.65;
 
 	ALBEDO    = albedo;
 	ROUGHNESS = 0.90 - noise * 0.07;
