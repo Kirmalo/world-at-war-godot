@@ -1,6 +1,20 @@
 shader_type spatial;
 render_mode cull_disabled;
 
+// Smooth value noise — used for damage cracks and scorching
+float vnoise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	float a = fract(sin(dot(i,              vec2(127.1, 311.7))) * 43758.5);
+	float b = fract(sin(dot(i + vec2(1,0),  vec2(127.1, 311.7))) * 43758.5);
+	float c = fract(sin(dot(i + vec2(0,1),  vec2(127.1, 311.7))) * 43758.5);
+	float d = fract(sin(dot(i + vec2(1,1),  vec2(127.1, 311.7))) * 43758.5);
+	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+uniform float damage : hint_range(0.0, 1.0) = 0.0;
+
 void fragment() {
 	float is_roof = step(0.9, NORMAL.y);
 	float a = COLOR.a;
@@ -50,6 +64,20 @@ void fragment() {
 
 	vec3 wall_albedo = brick_col*is_brick + wood_col*is_wood + glass_col*is_glass + conc_col*is_conc;
 	float wall_rough = 0.88*is_brick + 0.85*is_wood + g_rough*is_glass + 0.92*is_conc;
+
+	// Damage: darken + crack network + scorch patches (walls only, not roof)
+	if (damage > 0.0) {
+		wall_albedo *= 1.0 - damage * 0.65;
+		// Ridge-crack pattern: invert noise ridges → thin dark veins
+		float r1 = 1.0 - abs(vnoise(UV * 12.0) * 2.0 - 1.0);
+		float r2 = 1.0 - abs(vnoise(UV * 22.0 + vec2(1.7, 0.8)) * 2.0 - 1.0);
+		float crack = pow(min(r1, r2), 5.0);
+		wall_albedo = mix(wall_albedo, vec3(0.04, 0.03, 0.02), crack * damage * 0.88);
+		// Scorch patches — dark burn marks that intensify with damage
+		float scorch = vnoise(UV * 3.5 + vec2(5.2, 1.8));
+		wall_albedo = mix(wall_albedo, vec3(0.06, 0.04, 0.02),
+			smoothstep(0.55, 0.80, scorch) * damage * 0.75);
+	}
 
 	ALBEDO    = mix(wall_albedo, roof_albedo, is_roof);
 	ROUGHNESS = mix(wall_rough, 0.90, is_roof);

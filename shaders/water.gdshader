@@ -26,7 +26,15 @@ void fragment() {
 
 	vec3 deep    = vec3(0.04, 0.13, 0.30);
 	vec3 shallow = vec3(0.18, 0.44, 0.62);   // lighter, more cyan near shore
-	ALBEDO    = mix(shallow, mix(deep, shallow, wave * 0.5), shore);
+	vec3 albedo = mix(shallow, mix(deep, shallow, wave * 0.5), shore);
+
+	// Shore foam: white band at very shallow water, modulated by wave crests
+	float foam_band  = smoothstep(0.0, 0.55, water_depth) * (1.0 - smoothstep(0.35, 0.85, water_depth));
+	float foam_noise = w1 * 0.55 + w2 * 0.30 + w3 * 0.15;
+	float foam       = foam_band * clamp(foam_noise - 0.28, 0.0, 1.0) * 2.0;
+	albedo = mix(albedo, vec3(0.92, 0.94, 0.96), clamp(foam, 0.0, 0.82));
+
+	ALBEDO    = albedo;
 	ROUGHNESS = 0.04 + wave * 0.05;
 	METALLIC  = 0.0;
 	SPECULAR  = 0.95;
