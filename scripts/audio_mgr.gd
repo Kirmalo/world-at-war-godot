@@ -2,6 +2,7 @@ extends Node
 
 # Procedural audio — no asset files required.
 # All sounds are synthesised from sine waves, noise and envelopes.
+# Volume persistence is delegated to the Settings autoload (settings_mgr.gd).
 
 const RATE := 44100
 
@@ -10,7 +11,7 @@ var master_volume_db: float = 0.0
 var _ambient_player: AudioStreamPlayer = null
 
 func _ready() -> void:
-	_load_volume()
+	master_volume_db = Settings.volume_db   # Settings autoload initialises first
 	# Pre-generate everything so first combat has no stutter
 	for s in ["shot_rifle","shot_mg","shot_sniper","explode","click","death","wave_alarm","victory","defeat","heal","capture","capture_lost","deploy","hq_alarm"]:
 		_cache[s] = _gen(s)
@@ -51,43 +52,23 @@ func set_master_volume(db: float) -> void:
 	master_volume_db = clampf(db, -40.0, 0.0)
 	if is_instance_valid(_ambient_player):
 		_ambient_player.volume_db = -28.0 + master_volume_db
-	_save_volume()
-
-func _load_volume() -> void:
-	if not FileAccess.file_exists("user://settings.json"): return
-	var f := FileAccess.open("user://settings.json", FileAccess.READ)
-	if f == null: return
-	var j := JSON.new()
-	if j.parse(f.get_as_text()) == OK:
-		var d = j.get_data()
-		if d is Dictionary:
-			master_volume_db = clampf(float(d.get("volume_db", 0.0)), -40.0, 0.0)
-	f.close()
-
-func _save_volume() -> void:
-	var existing: Dictionary = {}
-	if FileAccess.file_exists("user://settings.json"):
-		var rf := FileAccess.open("user://settings.json", FileAccess.READ)
-		if rf != null:
-			var j := JSON.new()
-			if j.parse(rf.get_as_text()) == OK:
-				var d = j.get_data()
-				if d is Dictionary: existing = d
-			rf.close()
-	existing["volume_db"] = master_volume_db
-	var wf := FileAccess.open("user://settings.json", FileAccess.WRITE)
-	if wf != null:
-		wf.store_string(JSON.stringify(existing))
-		wf.close()
+	Settings.set_volume_db(master_volume_db)   # delegate persistence to Settings
 
 # ── Public API ────────────────────────────────────────────────
 
+## Play a flat (non-positional) sound.
 func play(sound: String, vol_db: float = 0.0) -> void:
 	if not _cache.has(sound):
 		_cache[sound] = _gen(sound)
 	_emit(_cache[sound], vol_db)
 
-# ── Playback ──────────────────────────────────────────────────
+## Play a positional 3-D sound at world position `at`.
+func play_at(sound: String, at: Vector3, vol_db: float = 0.0) -> void:
+	if not _cache.has(sound):
+		_cache[sound] = _gen(sound)
+	_emit_3d(_cache[sound], at, vol_db)
+
+# ── Flat playback ─────────────────────────────────────────────
 
 func _emit(samples: PackedFloat32Array, vol_db: float) -> void:
 	if samples.is_empty(): return
@@ -100,6 +81,34 @@ func _emit(samples: PackedFloat32Array, vol_db: float) -> void:
 	player.volume_db = vol_db + master_volume_db
 	# Add to root so scene switches don't cut off playing sounds
 	get_tree().root.add_child(player)
+	player.play()
+	var pb := player.get_stream_playback() as AudioStreamGeneratorPlayback
+	if pb:
+		for i in samples.size():
+			pb.push_frame(Vector2(samples[i], samples[i]))
+	get_tree().create_timer(dur + 0.18).timeout.connect(
+		func() -> void: if is_instance_valid(player): player.queue_free())
+
+# ── 3-D positional playback ───────────────────────────────────
+
+func _emit_3d(samples: PackedFloat32Array, at: Vector3, vol_db: float) -> void:
+	if samples.is_empty(): return
+	var dur := float(samples.size()) / float(RATE)
+	var gen := AudioStreamGenerator.new()
+	gen.mix_rate      = float(RATE)
+	gen.buffer_length = dur + 0.08
+	var player := AudioStreamPlayer3D.new()
+	player.stream           = gen
+	player.volume_db        = vol_db + master_volume_db
+	player.max_distance     = 40.0
+	player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+	player.global_position  = at
+	# Parent to current scene so the active Camera3D acts as audio listener
+	var scene := get_tree().current_scene
+	if scene == null:
+		get_tree().root.add_child(player)
+	else:
+		scene.add_child(player)
 	player.play()
 	var pb := player.get_stream_playback() as AudioStreamGeneratorPlayback
 	if pb:

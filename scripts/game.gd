@@ -9,6 +9,14 @@ const _CHAR_WALK := preload("res://assets/units/KayKit_Character_Animations_1.1/
 const _CHAR_CMBT := preload("res://assets/units/KayKit_Character_Animations_1.1/Animations/gltf/Rig_Medium/Rig_Medium_CombatRanged.glb")
 const _CHAR_DIE  := preload("res://assets/units/KayKit_Character_Animations_1.1/Animations/gltf/Rig_Medium/Rig_Medium_Simulation.glb")
 
+# Shader preloads — compiled once, reused for every material of that type
+const _SHADER_ROAD         := preload("res://shaders/road.gdshader")
+const _SHADER_GROUND       := preload("res://shaders/ground.gdshader")
+const _SHADER_BUILDING     := preload("res://shaders/building.gdshader")
+const _SHADER_WATER        := preload("res://shaders/water.gdshader")
+const _SHADER_TREE_CROWN   := preload("res://shaders/tree_crown.gdshader")
+const _SHADER_TREE_CONIFER := preload("res://shaders/tree_conifer.gdshader")
+
 # ── UNIT DEFINITIONS ──────────────────────────────────────────
 # Player units are MILITIA — local defenders, cheap, weaker individually
 # Enemy units are MILITARY — invading force, better equipped
@@ -161,6 +169,18 @@ var _on_mobile: bool         = false
 var _elapsed_sec: float      = 0.0
 var _units_lost: int         = 0
 
+# Deploy zone visual and unit count HUD
+var _deploy_zone: MeshInstance3D = null
+var _unit_count_lbl: Label       = null
+
+# Priority status bar: higher priority messages suppress lower-priority ones
+# STATUS_INFO=0 (2 s), STATUS_TACTICAL=1 (3.5 s), STATUS_CRITICAL=2 (5 s)
+var _status_priority: int  = 0
+var _status_expires:  float = 0.0
+
+# A* path cache — tilemap never changes post-generation so paths are permanent
+var _path_cache: Dictionary = {}
+
 # Tutorial
 var _tut_layer:  CanvasLayer = null
 var _tut_step:   int         = 0
@@ -219,8 +239,7 @@ func _do_ready_async() -> void:
 func _build_world() -> void:
 	var main := _main()
 	# Base ground — solid border/fill, always present
-	var gnd_s := Shader.new(); gnd_s.code = _ground_shader_code()
-	var gnd_mat := ShaderMaterial.new(); gnd_mat.shader = gnd_s
+	var gnd_mat := ShaderMaterial.new(); gnd_mat.shader = _SHADER_GROUND
 	var gnd_bm := BoxMesh.new(); gnd_bm.size = Vector3(HALF*2.0+1.0, 0.12, HALF*2.0+1.0)
 	var gnd := MeshInstance3D.new(); gnd.mesh = gnd_bm
 	gnd.set_surface_override_material(0, gnd_mat)
@@ -479,8 +498,7 @@ func _build_osm_roads() -> void:
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	var mi := MeshInstance3D.new()
 	mi.mesh = am
-	var road_s := Shader.new(); road_s.code = _road_shader_code()
-	var road_mat := ShaderMaterial.new(); road_mat.shader = road_s
+	var road_mat := ShaderMaterial.new(); road_mat.shader = _SHADER_ROAD
 	mi.set_surface_override_material(0, road_mat)
 	add_child(mi)
 
@@ -642,10 +660,8 @@ func _build_osm_buildings() -> void:
 	arrays[Mesh.ARRAY_INDEX]   = all_idx
 	var am := ArrayMesh.new()
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var bshader := Shader.new()
-	bshader.code = _bld_shader_code()
 	var mat := ShaderMaterial.new()
-	mat.shader = bshader
+	mat.shader = _SHADER_BUILDING
 	var mi := MeshInstance3D.new()
 	mi.mesh = am
 	mi.set_surface_override_material(0, mat)
@@ -692,8 +708,7 @@ func _place_road(px: float, pz: float) -> void:
 	pm.size = Vector2(TCELL, TCELL)
 	pm.subdivide_width = 1; pm.subdivide_depth = 1
 	var road_mi := MeshInstance3D.new(); road_mi.mesh = pm
-	var road_s := Shader.new(); road_s.code = _road_shader_code()
-	var road_mat := ShaderMaterial.new(); road_mat.shader = road_s
+	var road_mat := ShaderMaterial.new(); road_mat.shader = _SHADER_ROAD
 	road_mi.set_surface_override_material(0, road_mat)
 	road_mi.position = Vector3(px, 0.025, pz)
 	add_child(road_mi)
@@ -927,9 +942,8 @@ func _tree_base_color(tree_type: String, sat_col: Color) -> Color:
 func _get_tree_mat(tree_type: String) -> ShaderMaterial:
 	if _tree_mats.has(tree_type):
 		return _tree_mats[tree_type] as ShaderMaterial
-	var s := Shader.new()
-	s.code = _tree_conifer_shader_code() if tree_type == "CONIFER" else _tree_crown_shader_code()
-	var mat := ShaderMaterial.new(); mat.shader = s
+	var mat := ShaderMaterial.new()
+	mat.shader = _SHADER_TREE_CONIFER if tree_type == "CONIFER" else _SHADER_TREE_CROWN
 	_tree_mats[tree_type] = mat
 	return mat
 
@@ -1073,10 +1087,8 @@ func _build_tree_shrub(rx: float, rz: float, sx: float, col: Color) -> void:
 
 func _place_water(px: float, pz: float) -> void:
 	if _water_mat == null:
-		var s := Shader.new()
-		s.code = _water_shader_code()
 		_water_mat = ShaderMaterial.new()
-		_water_mat.shader = s
+		_water_mat.shader = _SHADER_WATER
 	var pm := PlaneMesh.new()
 	pm.size = Vector2(TCELL, TCELL)
 	pm.subdivide_width = 4
@@ -1380,14 +1392,14 @@ func _update_capture_points(delta: float) -> void:
 			if float(cp.progress) >= 1.0 and cp.owner != "player":
 				cp.owner = "player"
 				_set_cp_color(cp, Color(0.3,1.0,0.43))
-				_set_status("CAPTURE POINT SECURED! +15 SUPPLIES/s")
+				_set_status("CAPTURE POINT SECURED! +15 SUPPLIES/s", STATUS_TACTICAL)
 				Sounds.play("capture", -2.0)
 		elif has_e and not has_p:
 			cp.progress = maxf(0.0, float(cp.progress)-delta/5.0)
 			if float(cp.progress) <= 0.0 and cp.owner != "enemy":
 				cp.owner = "enemy"
 				_set_cp_color(cp, Color(1.0,0.2,0.15))
-				_set_status("CAPTURE POINT LOST!")
+				_set_status("CAPTURE POINT LOST!", STATUS_TACTICAL)
 				Sounds.play("capture_lost", -2.0)
 		if cp.owner == "player": bonus += 15.0
 		# Animate capture ring: scale with progress, pulse when being captured
@@ -1918,6 +1930,7 @@ func _process(delta: float) -> void:
 				_grenade_cursor.position = Vector3(wp.x, 0.05, wp.z)
 	if not game_active or game_paused: return
 	_elapsed_sec += delta
+	_tick_status(delta)
 	_update_wave(delta)
 	_update_units(delta)
 	_update_fog()
@@ -1975,14 +1988,16 @@ func _launch_wave() -> void:
 	elif variance < 0 and base_kinds.size() > 2:
 		base_kinds.remove_at(_rng.randi() % base_kinds.size())
 	Sounds.play("wave_alarm", 0.0)
-	_set_status("ENEMY ADVANCE — WAVE %d INCOMING!" % wave_num)
+	_set_status("ENEMY ADVANCE — WAVE %d INCOMING!" % wave_num, STATUS_CRITICAL)
 	_flash_wave_banner(wave_num)
-	# Later waves attack from more edges: wave 1-2 = 1 edge, 3-4 = 2, 5 = 3
-	var edge_count: int = 1 + (wave_num - 1) / 2
+	# Later waves attack from more edges: wave 1-2 = 1, 3-4 = 2, 5+ = 4
+	var edge_count: int = mini(1 + (wave_num - 1) / 2, 4)
 	for i in base_kinds.size():
-		var sp := _wave_spawn_pos(i % edge_count)
+		var edge_idx: int = i % edge_count
+		var sp := _wave_spawn_pos(edge_idx)
 		var u := spawn_unit(str(base_kinds[i]), "enemy", sp.x, sp.z)
 		if u != null:
+			u.spawn_edge = edge_idx
 			# Difficulty HP scaling
 			if diff == "easy":
 				u.hp = int(float(u.hp) * 0.75); u.hp_max = u.hp
@@ -1995,7 +2010,21 @@ func _wave_spawn_pos(edge: int) -> Vector3:
 	match edge:
 		0: return _find_road_near(-HQ_X + (_rng.randf()-0.5)*8.0, -HQ_Z + (_rng.randf()-0.5)*8.0)  # NW corner
 		1: return _find_road_near(j, -HALF + 1.0 + _rng.randf()*3.0)                               # North edge
-		_: return _find_road_near(-HALF + 1.0 + _rng.randf()*3.0, j)                               # West edge
+		2: return _find_road_near(-HALF + 1.0 + _rng.randf()*3.0, j)                               # West edge
+		_: return _find_road_near(HALF  - 1.0 - _rng.randf()*3.0, j)                               # East edge
+
+func _retreat_pos(u: Unit) -> Vector3:
+	var jitter := Vector3(_rng.randf_range(-4.0, 4.0), 0.0, _rng.randf_range(-4.0, 4.0))
+	var base: Vector3
+	match u.spawn_edge:
+		0: base = Vector3(-HQ_X, 0.0, -HQ_Z)                          # NW corner
+		1: base = Vector3(u.global_position.x, 0.0, -HALF - 2.0)      # North edge
+		2: base = Vector3(-HALF - 2.0, 0.0, u.global_position.z)      # West edge
+		_: base = Vector3( HALF + 2.0, 0.0, u.global_position.z)      # East edge
+	return Vector3(
+		clampf(base.x + jitter.x, -HALF + 1.0, HALF - 1.0),
+		0.0,
+		clampf(base.z + jitter.z, -HALF + 1.0, HALF - 1.0))
 
 func _update_units(delta: float) -> void:
 	var dead: Array = []
@@ -2054,7 +2083,7 @@ func _update_units(delta: float) -> void:
 		_death_effect(unit)
 
 func _death_effect(unit: Unit) -> void:
-	Sounds.play("death", -8.0)
+	Sounds.play_at("death", unit.global_position, -8.0)
 	unit.set_selected(false)
 	var pos  := unit.global_position
 	var team := unit.team
@@ -2174,11 +2203,7 @@ func _tick_enemy(u: Unit, delta: float) -> void:
 		return
 	# Critically low HP: stochastic retreat toward spawn edge
 	if u.hp < int(float(u.hp_max) * 0.22) and u.state != Unit.State.MOVING and _rng.randf() < 0.008:
-		var retreat_dest := Vector3(
-			clampf(-HQ_X + _rng.randf_range(-4.0, 4.0), -HALF+1.0, HALF-1.0),
-			0.0,
-			clampf(-HQ_Z + _rng.randf_range(-4.0, 4.0), -HALF+1.0, HALF-1.0))
-		_move_with_path(u, retreat_dest)
+		_move_with_path(u, _retreat_pos(u))
 		return
 	# Opportunistic bunker: garrison in a nearby enemy-owned CP when not moving
 	if u.state != Unit.State.MOVING and _try_enemy_bunker(u):
@@ -2489,7 +2514,7 @@ func _tick_medic_heal(u: Unit, delta: float) -> void:
 		u.issue_move(best.global_position)
 
 func _spawn_heal_pulse(at: Vector3) -> void:
-	Sounds.play("heal", -5.0)
+	Sounds.play_at("heal", at, -5.0)
 	var ring_m := TorusMesh.new()
 	ring_m.inner_radius = 0.36; ring_m.outer_radius = 0.50
 	ring_m.rings = 3; ring_m.ring_segments = 12
@@ -2548,6 +2573,10 @@ func _find_path(from_world: Vector3, to_world: Vector3) -> Array:
 	var tp := _nearest_passable(int((to_world.z + HALF) / TCELL), int((to_world.x + HALF) / TCELL))
 	var tr: int = tp.x; var tc: int = tp.y
 	if fr == tr and fc == tc: return [to_world]
+	# Cache by tile-pair key — tilemap is static after generation, so paths never stale
+	var cache_key := Vector2i(fr * TG + fc, tr * TG + tc)
+	if _path_cache.has(cache_key):
+		return (_path_cache[cache_key] as Array).duplicate()
 	var sk: int = fr*TG+fc; var goal_key: int = tr*TG+tc
 	var open_set: Array = [[_heur(fr,fc,tr,tc), 0.0, fr, fc]]
 	var g_cost:  Dictionary = {sk: 0.0}
@@ -2583,7 +2612,16 @@ func _find_path(from_world: Vector3, to_world: Vector3) -> Array:
 			if not g_cost.has(nk) or ng < float(g_cost.get(nk, INF)):
 				g_cost[nk] = ng; par_map[nk] = key
 				open_set.append([ng + _heur(nnr,nnc,tr,tc), ng, nnr, nnc])
-	if not found: return [to_world]
+	if not found:
+		# Return the closest reachable tile found so far instead of a blocked position
+		var best_key: int = -1; var best_dist: float = INF
+		for k in closed:
+			var kr: int = int(k) / TG; var kc: int = int(k) % TG
+			var d := _heur(kr, kc, tr, tc)
+			if d < best_dist: best_dist = d; best_key = int(k)
+		if best_key >= 0:
+			return [Vector3(_tx(best_key % TG), 0.0, _tz(best_key / TG))]
+		return [to_world]
 	var path_keys: Array = []
 	var cur: int = goal_key
 	while cur != sk and par_map.has(cur):
@@ -2599,6 +2637,8 @@ func _find_path(from_world: Vector3, to_world: Vector3) -> Array:
 		waypoints.append(Vector3(to_world.x, 0.0, to_world.z))
 	else:
 		waypoints.append(Vector3(_tx(tc), 0.0, _tz(tr)))
+	# Store in cache (duplicate so callers can mutate their own copy)
+	_path_cache[cache_key] = waypoints.duplicate()
 	return waypoints
 
 func _move_with_path(u: Unit, dest: Vector3) -> void:
@@ -2661,11 +2701,12 @@ func _fire(shooter: Unit, target: Unit) -> void:
 	_flash_hit(target)
 	_spawn_hit_spark(target.global_position + Vector3(0.0, 0.5, 0.0))
 	_spawn_muzzle(shooter.global_position + Vector3(0.0,0.6,0.0), target.global_position)
-	# Shot sound
+	# Shot sound — positional so distant gunfire sounds quieter
 	match shooter.kind:
-		"sniper","e_sniper": Sounds.play("shot_sniper", -4.0)
-		"mg_team","e_mg":    Sounds.play("shot_mg",     -2.0)
-		_:                   Sounds.play("shot_rifle",   -3.0)
+		"sniper","e_sniper": Sounds.play_at("shot_sniper", shooter.global_position, -4.0)
+		"mg_team","e_mg":    Sounds.play_at("shot_mg",     shooter.global_position, -2.0)
+		_:                   Sounds.play_at("shot_rifle",  shooter.global_position, -3.0)
+	_spawn_dmg_popup(target.global_position + Vector3(0.0, 1.2, 0.0), dmg)
 	# Grenadier area splash
 	if shooter.kind in ["grenadier","e_gren"]:
 		_spawn_explosion(target.global_position)
@@ -2698,7 +2739,7 @@ func _flash_hit(u: Unit) -> void:
 				tw.tween_callback(func(): if is_instance_valid(mi): mi.set_surface_override_material(surf, orig))
 
 func _spawn_explosion(pos: Vector3) -> void:
-	Sounds.play("explode", -2.0)
+	Sounds.play_at("explode", pos, -2.0)
 	# Flash sphere
 	var fmat := StandardMaterial3D.new()
 	fmat.albedo_color = Color(1.0, 0.78, 0.28, 0.95)
@@ -2750,6 +2791,22 @@ func _spawn_explosion(pos: Vector3) -> void:
 func _apply_shake(intensity: float) -> void:
 	_shake_intensity = maxf(_shake_intensity, intensity)
 	_shake_timer = 0.35
+
+func _spawn_dmg_popup(pos: Vector3, dmg: int) -> void:
+	var lbl := Label3D.new()
+	lbl.text             = str(dmg)
+	lbl.font_size        = 28
+	lbl.modulate         = Color(1.0, 0.9, 0.2) if dmg < 40 else Color(1.0, 0.35, 0.15)
+	lbl.outline_size     = 4
+	lbl.outline_modulate = Color(0.0, 0.0, 0.0, 0.75)
+	lbl.billboard        = BaseMaterial3D.BILLBOARD_ENABLED
+	lbl.no_depth_test    = true
+	lbl.position         = pos
+	add_child(lbl)
+	var tw := create_tween().set_parallel(true).set_ease(Tween.EASE_OUT)
+	tw.tween_property(lbl, "position", pos + Vector3(0.0, 1.8, 0.0), 0.65)
+	tw.tween_property(lbl, "modulate:a", 0.0, 0.65).set_ease(Tween.EASE_IN)
+	tw.finished.connect(func()->void: if is_instance_valid(lbl): lbl.queue_free())
 
 func _spawn_hit_spark(pos: Vector3) -> void:
 	for i in 6:
@@ -2974,10 +3031,13 @@ func _init_fog() -> void:
 	add_child(_fog_mesh)
 
 func _update_fog() -> void:
+	var changed := false
 	# Decay visible → seen
 	for r in TG:
 		for c in TG:
-			if fog[r][c] == 2: fog[r][c] = 1
+			if fog[r][c] == 2:
+				fog[r][c] = 1
+				changed = true
 	# Reveal tiles in range of each living player unit
 	for u in units:
 		var unit := u as Unit
@@ -2990,8 +3050,11 @@ func _update_fog() -> void:
 				if dr*dr + dc*dc > vision*vision: continue
 				var r := ur + dr; var c := uc + dc
 				if r >= 0 and r < TG and c >= 0 and c < TG:
-					fog[r][c] = 2
-	# Repaint fog texture
+					if fog[r][c] != 2:
+						fog[r][c] = 2
+						changed = true
+	# Only upload to GPU when the fog state actually changed this frame
+	if not changed: return
 	for r in TG:
 		for c in TG:
 			var a: float
@@ -3550,7 +3613,7 @@ func _ground_hit(screen_pos: Vector2) -> Vector3:
 
 func _save_score(victory: bool) -> void:
 	var mn := _main()
-	var key := "%.4f_%.4f" % [float(mn.active_lat), float(mn.active_lon)]
+	var key: String = mn.active_name if not mn.active_name.is_empty() else "%.4f_%.4f" % [float(mn.active_lat), float(mn.active_lon)]
 	var scores: Dictionary = {}
 	if FileAccess.file_exists("user://scores.json"):
 		var rf := FileAccess.open("user://scores.json", FileAccess.READ)
@@ -3745,7 +3808,7 @@ func _ability_militia(u: Unit) -> void:
 	var bnode := _build_barricade(u.global_position)
 	_barricades.append({"node": bnode, "pos": u.global_position})
 	u.in_cover = true
-	Sounds.play("shot_rifle", -14.0)
+	Sounds.play_at("shot_rifle", u.global_position, -14.0)
 	_set_status("BARRICADE PLACED — UNIT IN COVER")
 	_update_unit_info()
 
@@ -3794,7 +3857,7 @@ func _ability_medic_stim(u: Unit) -> void:
 			fu.hp = mini(fu.hp_max, fu.hp + 30)
 			fu._refresh_hp_bar()
 			_spawn_heal_pulse(fu.global_position)
-	Sounds.play("heal", -4.0)
+	Sounds.play_at("heal", u.global_position, -4.0)
 	_set_status("STIMPACK — HEALED SELF AND NEARBY ALLIES")
 	_update_unit_info()
 
@@ -3820,7 +3883,8 @@ func _fire_overwatch(u: Unit, target: Unit) -> void:
 	_flash_hit(target)
 	_spawn_hit_spark(target.global_position + Vector3(0.0, 0.5, 0.0))
 	_spawn_muzzle(u.global_position + Vector3(0.0, 0.6, 0.0), target.global_position)
-	Sounds.play("shot_sniper", -3.0)
+	Sounds.play_at("shot_sniper", u.global_position, -3.0)
+	_spawn_dmg_popup(target.global_position + Vector3(0.0, 1.2, 0.0), dmg)
 	_set_status("OVERWATCH TRIGGERED — %d DMG" % dmg)
 	_update_unit_info()
 
@@ -3838,7 +3902,7 @@ func _tick_mg_suppressing(u: Unit, _delta: float) -> void:
 			_flash_hit(e)
 			_spawn_hit_spark(e.global_position + Vector3(0.0, 0.5, 0.0))
 			_spawn_muzzle(u.global_position + Vector3(0.0, 0.6, 0.0), e.global_position)
-			Sounds.play("shot_mg", -2.0)
+			Sounds.play_at("shot_mg", u.global_position, -2.0)
 			break
 
 func _build_barricade(pos: Vector3) -> MeshInstance3D:
@@ -3960,8 +4024,26 @@ func _update_unit_info() -> void:
 	else:
 		_ability_btn.visible = false
 
-func _set_status(msg: String) -> void:
+## Priority constants for _set_status
+const STATUS_INFO     := 0   # 2 s  — routine hints
+const STATUS_TACTICAL := 1   # 3.5 s — capture events
+const STATUS_CRITICAL := 2   # 5 s  — wave incoming, HQ under attack
+
+func _set_status(msg: String, priority: int = STATUS_INFO) -> void:
+	# Lower-priority messages don't interrupt higher-priority ones still on screen
+	var durations := [2.0, 3.5, 5.0]
+	if priority < _status_priority and _status_expires > 0.0:
+		return
+	_status_priority = priority
+	_status_expires  = durations[clampi(priority, 0, durations.size() - 1)]
 	if status_label: status_label.text = msg
+
+func _tick_status(delta: float) -> void:
+	if _status_expires > 0.0:
+		_status_expires -= delta
+		if _status_expires <= 0.0:
+			_status_priority = 0
+			_status_expires  = 0.0
 
 func _flash_wave_banner(wave: int) -> void:
 	var layer := CanvasLayer.new(); layer.layer = 9; add_child(layer)
@@ -4097,16 +4179,7 @@ func _build_settings_panel_ctrl() -> Control:
 	return c
 
 func _load_gfx_setting() -> bool:
-	if not FileAccess.file_exists("user://settings.json"): return true
-	var f := FileAccess.open("user://settings.json", FileAccess.READ)
-	if f == null: return true
-	var j := JSON.new()
-	var hi := true
-	if j.parse(f.get_as_text()) == OK:
-		var d = j.get_data()
-		if d is Dictionary: hi = bool(d.get("high_graphics", true))
-	f.close()
-	return hi
+	return Settings.high_graphics
 
 func _set_graphics_quality(high: bool) -> void:
 	if _env_ref != null:
@@ -4116,21 +4189,7 @@ func _set_graphics_quality(high: bool) -> void:
 		_env_ref.volumetric_fog_enabled = high
 		_env_ref.glow_enabled           = high
 	get_viewport().msaa_3d = Viewport.MSAA_2X if high else Viewport.MSAA_DISABLED
-	# Persist
-	var existing: Dictionary = {}
-	if FileAccess.file_exists("user://settings.json"):
-		var rf := FileAccess.open("user://settings.json", FileAccess.READ)
-		if rf != null:
-			var j := JSON.new()
-			if j.parse(rf.get_as_text()) == OK:
-				var d = j.get_data()
-				if d is Dictionary: existing = d
-			rf.close()
-	existing["high_graphics"] = high
-	var wf := FileAccess.open("user://settings.json", FileAccess.WRITE)
-	if wf != null:
-		wf.store_string(JSON.stringify(existing))
-		wf.close()
+	Settings.set_high_graphics(high)   # delegate persistence to Settings autoload
 
 # ── Panel helpers ─────────────────────────────────────────────
 
@@ -4362,235 +4421,6 @@ func _mat(color: Color) -> StandardMaterial3D:
 func _mat_new(color: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new(); m.albedo_color = color; return m
 
-func _road_shader_code() -> String:
-	return """
-shader_type spatial;
-render_mode depth_draw_opaque;
-
-float vnoise(vec2 p) {
-	vec2 i = floor(p); vec2 f = fract(p);
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	float a = fract(sin(dot(i,             vec2(127.1,311.7)))*43758.5);
-	float b = fract(sin(dot(i+vec2(1,0),   vec2(127.1,311.7)))*43758.5);
-	float c = fract(sin(dot(i+vec2(0,1),   vec2(127.1,311.7)))*43758.5);
-	float d = fract(sin(dot(i+vec2(1,1),   vec2(127.1,311.7)))*43758.5);
-	return mix(mix(a,b,u.x), mix(c,d,u.x), u.y);
-}
-
-void fragment() {
-	// Asphalt grain — two scale noise
-	float grain = vnoise(UV * 60.0) * 0.55 + vnoise(UV * 180.0) * 0.45;
-	vec3 asphalt = vec3(0.140, 0.138, 0.132) * (0.82 + grain * 0.36);
-
-	// Dashed centre line — runs along V axis
-	float dash_u = abs(UV.x - 0.5);
-	float dash_v = fract(UV.y * 5.0);
-	float centre_line = step(dash_u, 0.022) * step(dash_v, 0.55);
-
-	// Solid edge lines
-	float edge_line = step(abs(UV.x - 0.08), 0.018) + step(abs(UV.x - 0.92), 0.018);
-	edge_line = clamp(edge_line, 0.0, 1.0);
-
-	// Faded white markings
-	float markings = clamp(centre_line * 0.55 + edge_line * 0.35, 0.0, 1.0);
-	vec3 mark_col = vec3(0.82, 0.80, 0.72);
-	vec3 albedo = mix(asphalt, mark_col, markings);
-
-	// Derive cheap surface normal for micro-roughness
-	float eps = 0.006;
-	float nx = vnoise(UV*60.0+vec2(eps,0)) - vnoise(UV*60.0-vec2(eps,0));
-	float nz = vnoise(UV*60.0+vec2(0,eps)) - vnoise(UV*60.0-vec2(0,eps));
-	NORMAL_MAP       = normalize(vec3(nx*3.0, nz*3.0, 1.0))*0.5+0.5;
-	NORMAL_MAP_DEPTH = 0.25;
-
-	ALBEDO    = albedo;
-	ROUGHNESS = 0.88 - grain * 0.06;
-	METALLIC  = 0.0;
-	SPECULAR  = 0.22;
-}
-"""
-
-func _tree_conifer_shader_code() -> String:
-	return """
-shader_type spatial;
-
-void vertex() {
-	// Conifers sway stiffly from base — low amplitude, slow frequency
-	float phase = VERTEX.x * 1.6 + VERTEX.z * 1.3;
-	// Local Y: apex is +h/2, base is -h/2; scale sway so base barely moves
-	float height_factor = clamp(VERTEX.y * 2.0 + 1.0, 0.0, 1.0);
-	VERTEX.x += sin(TIME * 0.80 + phase) * 0.014 * height_factor;
-	VERTEX.z += cos(TIME * 0.62 + phase * 0.85) * 0.009 * height_factor;
-}
-
-void fragment() {
-	ALBEDO    = COLOR.rgb;
-	ROUGHNESS = 0.92;
-	METALLIC  = 0.0;
-	SPECULAR  = 0.10;
-}
-"""
-
-func _tree_crown_shader_code() -> String:
-	return """
-shader_type spatial;
-
-void vertex() {
-	// Wind sway — amplitude increases with height, per-instance phase from VERTEX.x
-	float phase = VERTEX.x * 2.7 + VERTEX.z * 1.9;
-	float sway  = sin(TIME * 1.4 + phase) * 0.038 + cos(TIME * 0.9 + phase * 0.7) * 0.022;
-	VERTEX.x += sway * max(0.0, VERTEX.y);
-	VERTEX.z += cos(TIME * 1.1 + phase * 1.3) * 0.024 * max(0.0, VERTEX.y);
-}
-
-void fragment() {
-	ALBEDO    = COLOR.rgb;
-	ROUGHNESS = 0.88;
-	METALLIC  = 0.0;
-}
-"""
-
-func _ground_shader_code() -> String:
-	return """
-shader_type spatial;
-render_mode depth_draw_opaque;
-
-// Smooth value noise — no hard cell edges
-float vnoise(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	float a = fract(sin(dot(i,              vec2(127.1, 311.7))) * 43758.5);
-	float b = fract(sin(dot(i + vec2(1,0),  vec2(127.1, 311.7))) * 43758.5);
-	float c = fract(sin(dot(i + vec2(0,1),  vec2(127.1, 311.7))) * 43758.5);
-	float d = fract(sin(dot(i + vec2(1,1),  vec2(127.1, 311.7))) * 43758.5);
-	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-void fragment() {
-	// Two octaves of smooth noise — coarse patch variation + fine detail
-	float n1 = vnoise(UV * 6.0);
-	float n2 = vnoise(UV * 28.0);
-	float noise = n1 * 0.65 + n2 * 0.35;
-
-	vec3 grass_lo = vec3(0.048, 0.098, 0.032);
-	vec3 grass_hi = vec3(0.165, 0.260, 0.088);
-	vec3 albedo = mix(grass_lo, grass_hi, noise);
-
-	// Dirt patches follow the coarse octave
-	float dirt = smoothstep(0.62, 0.76, n1);
-	vec3 dirt_col = vec3(0.170, 0.122, 0.068) * (0.78 + n2 * 0.22);
-	albedo = mix(albedo, dirt_col, dirt * 0.58);
-
-	// Derive a cheap normal from the noise gradient for micro-surface depth
-	float eps = 0.008;
-	float nx = vnoise(UV * 6.0 + vec2(eps, 0.0)) - vnoise(UV * 6.0 - vec2(eps, 0.0));
-	float nz = vnoise(UV * 6.0 + vec2(0.0, eps)) - vnoise(UV * 6.0 - vec2(0.0, eps));
-	NORMAL_MAP       = normalize(vec3(nx * 4.0, nz * 4.0, 1.0)) * 0.5 + 0.5;
-	NORMAL_MAP_DEPTH = 0.35;
-
-	ALBEDO    = albedo;
-	ROUGHNESS = 0.90 - noise * 0.07;
-	METALLIC  = 0.0;
-	SPECULAR  = 0.15;
-}
-"""
-
-func _bld_shader_code() -> String:
-	return """
-shader_type spatial;
-render_mode cull_disabled;
-
-void fragment() {
-	float is_roof = step(0.9, NORMAL.y);
-	float a = COLOR.a;
-
-	// Material type from vertex alpha: 1.0=brick, 0.75=wood, 0.5=concrete, 0.25=glass
-	float is_brick = step(0.875, a);
-	float is_wood  = step(0.625, a) * (1.0 - is_brick);
-	float is_glass = step(a, 0.375);
-	float is_conc  = 1.0 - is_brick - is_wood - is_glass;
-
-	// Brick — running bond pattern
-	vec2 b_uv   = UV / vec2(0.48, 0.26);
-	float b_row = floor(b_uv.y);
-	float b_off = mod(b_row, 2.0) * 0.5;
-	vec2 b_cell = vec2(fract(b_uv.x + b_off), fract(b_uv.y));
-	float mortar = max(step(0.91, b_cell.x), step(0.88, b_cell.y));
-	float brnd   = fract(sin(dot(floor(vec2(b_uv.x + b_off, b_uv.y)),
-		vec2(127.1, 311.7))) * 43758.5453);
-	vec3 brick_col = mix(COLOR.rgb * (0.92 + brnd * 0.16), COLOR.rgb * 0.50, mortar);
-
-	// Wood — horizontal grain lines
-	vec2 w_uv    = UV / vec2(0.10, 0.04);
-	float wgrain = fract(w_uv.y);
-	float wn     = fract(sin(dot(floor(w_uv), vec2(127.1, 311.7))) * 43758.5453);
-	float wline  = smoothstep(0.80, 1.0, wgrain) * 0.30;
-	vec3 wood_col = COLOR.rgb * (0.85 + wn * 0.20 - wline);
-
-	// Glass curtain wall
-	vec2 g_uv   = UV / vec2(0.42, 0.36);
-	vec2 g_cell = fract(g_uv);
-	float frame = max(max(step(g_cell.x, 0.07), step(0.93, g_cell.x)),
-		max(step(g_cell.y, 0.09), step(0.91, g_cell.y)));
-	float grnd  = fract(sin(dot(floor(g_uv), vec2(127.1, 311.7))) * 43758.5453);
-	vec3 glass_col = mix(COLOR.rgb * (0.75 + grnd * 0.50), COLOR.rgb, frame);
-	float g_rough = mix(0.03, 0.80, frame);
-	float g_metal = mix(0.55, 0.0, frame);
-
-	// Concrete panels
-	vec2 c_uv    = UV / vec2(0.55, 0.40);
-	float cnoise = fract(sin(dot(floor(c_uv), vec2(127.1, 311.7))) * 43758.5453);
-	float c_seam = max(step(0.96, fract(c_uv.y)), step(0.97, fract(c_uv.x)));
-	vec3 conc_col = COLOR.rgb * (0.88 + cnoise * 0.20) - vec3(c_seam * 0.12);
-
-	// Roof — granular tar/gravel, matches satellite color
-	float rnoise  = fract(sin(dot(floor(UV * 12.0), vec2(127.1, 311.7))) * 43758.5453);
-	vec3 roof_albedo = COLOR.rgb * (0.80 + rnoise * 0.24);
-
-	vec3 wall_albedo = brick_col*is_brick + wood_col*is_wood + glass_col*is_glass + conc_col*is_conc;
-	float wall_rough = 0.88*is_brick + 0.85*is_wood + g_rough*is_glass + 0.92*is_conc;
-
-	ALBEDO    = mix(wall_albedo, roof_albedo, is_roof);
-	ROUGHNESS = mix(wall_rough, 0.90, is_roof);
-	METALLIC  = g_metal * is_glass * (1.0 - is_roof);
-	SPECULAR  = 0.5;
-	EMISSION  = vec3(0.18, 0.28, 0.44) * (1.0 - frame) * is_glass * (1.0 - is_roof) * 0.25;
-}
-"""
-
-func _water_shader_code() -> String:
-	return """
-shader_type spatial;
-render_mode blend_mix, depth_draw_disabled, cull_back;
-
-void fragment() {
-	// Two layers of wave UVs scrolling in different directions
-	vec2 uv1 = UV * 4.0 + vec2(TIME * 0.050,  TIME * 0.028);
-	vec2 uv2 = UV * 2.5 + vec2(-TIME * 0.036, TIME * 0.062);
-	vec2 uv3 = UV * 8.0 + vec2(TIME * 0.022, -TIME * 0.041);
-
-	float w1 = sin(uv1.x * 6.2832 + uv1.y * 4.1888) * 0.5 + 0.5;
-	float w2 = sin(uv2.x * 3.1416 - uv2.y * 6.2832) * 0.5 + 0.5;
-	float w3 = sin(uv3.x * 9.4248 + uv3.y * 3.1416) * 0.5 + 0.5;
-	float wave = w1 * 0.50 + w2 * 0.32 + w3 * 0.18;
-
-	vec3 deep    = vec3(0.04, 0.13, 0.30);
-	vec3 shallow = vec3(0.09, 0.24, 0.48);
-	ALBEDO    = mix(deep, shallow, wave);
-	ROUGHNESS = 0.04 + wave * 0.05;
-	METALLIC  = 0.0;
-	SPECULAR  = 0.95;
-	ALPHA     = 0.86;
-
-	// Normal map from wave gradients (three octaves)
-	float nx = sin(uv1.y * 6.2832) * 0.14 + sin(uv3.y * 9.4248) * 0.06;
-	float nz = cos(uv2.x * 3.1416) * 0.14 + cos(uv3.x * 6.2832) * 0.06;
-	NORMAL_MAP       = normalize(vec3(nx, nz, 1.0)) * 0.5 + 0.5;
-	NORMAL_MAP_DEPTH = 0.70;
-}
-"""
-
 func _box(size: Vector3, mat: Material) -> MeshInstance3D:
 	var bm := BoxMesh.new(); bm.size = size
 	var mi := MeshInstance3D.new(); mi.mesh = bm
@@ -4598,7 +4428,7 @@ func _box(size: Vector3, mat: Material) -> MeshInstance3D:
 
 func _tx(c: int) -> float: return float(c - TG/2)*TCELL + TCELL/2.0
 func _tz(r: int) -> float: return float(r - TG/2)*TCELL + TCELL/2.0
-func _main() -> Node: return get_tree().root.get_node("Main")
+func _main() -> Main: return get_tree().root.get_node("Main") as Main
 
 # ── TUTORIAL ──────────────────────────────────────────────────
 
@@ -4611,9 +4441,10 @@ const _TUT_STEPS := [
 ]
 
 func _start_tutorial() -> void:
-	_tut_active = true
-	_tut_step   = 0
-	_tut_layer  = CanvasLayer.new()
+	_tut_active  = true
+	_tut_step    = 0
+	game_paused  = true   # freeze game loop while tutorial is on screen
+	_tut_layer   = CanvasLayer.new()
 	_tut_layer.layer = 20
 	add_child(_tut_layer)
 	_tut_show_step()
@@ -4687,6 +4518,7 @@ func _tut_show_step() -> void:
 
 func _tut_finish() -> void:
 	_tut_active = false
+	game_paused  = false  # resume game loop
 	if _tut_layer:
 		_tut_layer.queue_free()
 		_tut_layer = null

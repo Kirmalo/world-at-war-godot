@@ -1,4 +1,5 @@
 extends Node
+class_name Main
 
 var globe_scene      := preload("res://scenes/globe.tscn")
 var generation_scene := preload("res://scenes/generation.tscn")
