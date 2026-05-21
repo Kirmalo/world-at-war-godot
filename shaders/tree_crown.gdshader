@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_disabled;
+render_mode cull_disabled, depth_prepass_alpha;
 
 // Smooth value noise — used for alpha-clip leaf silhouette
 float vnoise(vec2 p) {
