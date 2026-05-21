@@ -1,6 +1,8 @@
 shader_type spatial;
 render_mode depth_draw_opaque;
 
+uniform sampler2D road_mask : hint_default_black, filter_linear;
+
 // Smooth value noise — no hard cell edges
 float vnoise(vec2 p) {
 	vec2 i = floor(p);
@@ -38,8 +40,15 @@ void fragment() {
 	NORMAL_MAP       = normalize(vec3(nx * 4.0 + nx2 * 2.5, nz * 4.0 + nz2 * 2.5, 1.0)) * 0.5 + 0.5;
 	NORMAL_MAP_DEPTH = 0.65;
 
+	// Road-edge blend: ground near roads darkens to asphalt-bleed colour
+	// road_mask is a TG×TG texture (white where roads exist); linear filter
+	// creates a soft gradient over the neighbouring tiles.
+	float road_prox = texture(road_mask, UV).r;
+	vec3  road_edge = vec3(0.09, 0.08, 0.06);
+	albedo = mix(albedo, road_edge, smoothstep(0.15, 0.65, road_prox) * 0.55);
+
 	ALBEDO    = albedo;
-	ROUGHNESS = 0.90 - noise * 0.07;
+	ROUGHNESS = mix(0.90 - noise * 0.07, 0.96, smoothstep(0.3, 0.7, road_prox));
 	METALLIC  = 0.0;
 	SPECULAR  = 0.15;
 }
