@@ -35,6 +35,7 @@ var garrisoned: bool          = false
 var garrison_tile: Vector2i   = Vector2i(-1, -1)
 var garrison_pending: Vector2i = Vector2i(-1, -1)
 var vet_kills: int            = 0
+var spawn_edge: int           = 0   # 0=NW, 1=North, 2=West, 3=East (for correct retreat dir)
 
 func setup(p_kind: String, p_team: String, def: Dictionary) -> void:
 	kind         = p_kind
