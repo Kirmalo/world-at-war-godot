@@ -12,4 +12,6 @@ void fragment() {
 	ALBEDO    = COLOR.rgb;
 	ROUGHNESS = 0.88;
 	METALLIC  = 0.0;
+	// Faint SSS-style emission: sunlit faces get a warm green-gold subsurface glow
+	EMISSION  = COLOR.rgb * 0.06 * max(0.0, dot(NORMAL, vec3(0.3, 1.0, 0.2)));
 }

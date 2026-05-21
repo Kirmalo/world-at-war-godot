@@ -16,6 +16,7 @@ const _SHADER_BUILDING     := preload("res://shaders/building.gdshader")
 const _SHADER_WATER        := preload("res://shaders/water.gdshader")
 const _SHADER_TREE_CROWN   := preload("res://shaders/tree_crown.gdshader")
 const _SHADER_TREE_CONIFER := preload("res://shaders/tree_conifer.gdshader")
+const _SHADER_ZONE_PULSE   := preload("res://shaders/zone_pulse.gdshader")
 
 # ── UNIT DEFINITIONS ──────────────────────────────────────────
 # Player units are MILITIA — local defenders, cheap, weaker individually
@@ -794,7 +795,7 @@ func _build_bld_brick_row(px: float, pz: float, sat_col: Color) -> void:
 	var roof_col := _bld_roof_color("BRICK_ROW", sat_col)
 	var h := 2.2 + _rng.randf() * 1.8
 	var bw := TCELL * 0.72; var bd := TCELL * 0.72
-	var body := _box(Vector3(bw, h, bd), _mat(wall_col))
+	var body := _bld_box(Vector3(bw, h, bd), wall_col, 1.0)  # 1.0 = brick
 	body.position = Vector3(px, h * 0.5, pz)
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(body)
@@ -814,7 +815,7 @@ func _build_bld_concrete_block(px: float, pz: float, sat_col: Color) -> void:
 	var roof_col := _bld_roof_color("CONCRETE_BLOCK", sat_col)
 	var h := 4.5 + _rng.randf() * 4.5
 	var bw := TCELL * 0.72; var bd := TCELL * 0.72
-	var body := _box(Vector3(bw, h, bd), _mat(wall_col))
+	var body := _bld_box(Vector3(bw, h, bd), wall_col, 0.25)  # 0.25 = concrete
 	body.position = Vector3(px, h * 0.5, pz)
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(body)
@@ -831,7 +832,7 @@ func _build_bld_glass_tower(px: float, pz: float, sat_col: Color) -> void:
 	var roof_col := _bld_roof_color("GLASS_TOWER", sat_col)
 	var h := 6.0 + _rng.randf() * 6.0
 	var bw := TCELL * 0.64; var bd := TCELL * 0.64
-	var body := _box(Vector3(bw, h, bd), _mat(wall_col))
+	var body := _bld_box(Vector3(bw, h, bd), wall_col, 0.5)  # 0.5 = glass
 	body.position = Vector3(px, h * 0.5, pz)
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(body)
@@ -845,7 +846,7 @@ func _build_bld_suburban_house(px: float, pz: float, sat_col: Color) -> void:
 	var roof_col := _bld_roof_color("SUBURBAN_HOUSE", sat_col)
 	var h := 1.9 + _rng.randf() * 1.2
 	var bw := TCELL * 0.70; var bd := TCELL * 0.70
-	var body := _box(Vector3(bw, h, bd), _mat(wall_col))
+	var body := _bld_box(Vector3(bw, h, bd), wall_col, 0.75)  # 0.75 = wood
 	body.position = Vector3(px, h * 0.5, pz)
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(body)
@@ -868,7 +869,7 @@ func _build_bld_industrial(px: float, pz: float, sat_col: Color) -> void:
 	var roof_col := _bld_roof_color("INDUSTRIAL", sat_col)
 	var h := 1.8 + _rng.randf() * 1.4
 	var bw := TCELL * 0.76; var bd := TCELL * 0.76
-	var body := _box(Vector3(bw, h, bd), _mat(wall_col))
+	var body := _bld_box(Vector3(bw, h, bd), wall_col, 0.25)  # 0.25 = concrete/metal
 	body.position = Vector3(px, h * 0.5, pz)
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(body)
@@ -893,7 +894,7 @@ func _build_bld_stone_historic(px: float, pz: float, sat_col: Color) -> void:
 	var roof_col := _bld_roof_color("STONE_HISTORIC", sat_col)
 	var h := 3.2 + _rng.randf() * 2.0
 	var bw := TCELL * 0.68; var bd := TCELL * 0.68
-	var body := _box(Vector3(bw, h, bd), _mat(wall_col))
+	var body := _bld_box(Vector3(bw, h, bd), wall_col, 1.0)  # 1.0 = brick (closest to stone)
 	body.position = Vector3(px, h * 0.5, pz)
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(body)
@@ -947,6 +948,16 @@ func _get_tree_mat(tree_type: String) -> ShaderMaterial:
 	_tree_mats[tree_type] = mat
 	return mat
 
+## Build a box MeshInstance3D whose body vertices carry vertex color + alpha so
+## _SHADER_BUILDING can read material type (1.0=brick, 0.75=wood, 0.5=glass, 0.25=concrete).
+func _bld_box(size: Vector3, col: Color, type_alpha: float) -> MeshInstance3D:
+	var bm := BoxMesh.new(); bm.size = size
+	var am := _mesh_with_color(bm, Color(col.r, col.g, col.b, type_alpha))
+	var mi := MeshInstance3D.new(); mi.mesh = am
+	var mat := ShaderMaterial.new(); mat.shader = _SHADER_BUILDING
+	mi.set_surface_override_material(0, mat)
+	return mi
+
 func _mesh_with_color(prim: PrimitiveMesh, col: Color) -> ArrayMesh:
 	var sv: Array = prim.get_mesh_arrays()
 	var arrays: Array = []; arrays.resize(Mesh.ARRAY_MAX)
@@ -990,7 +1001,7 @@ func _trunk(rx: float, rz: float, trunk_h: float, top_r: float, bot_r: float, co
 	add_child(t)
 
 func _crown_sphere(rx: float, ry: float, rz: float, radius: float, height_r: float,
-		col: Color, tree_type: String, segs: int = 8, rings: int = 6) -> void:
+		col: Color, tree_type: String, segs: int = 16, rings: int = 10) -> void:
 	var sm := SphereMesh.new(); sm.radius = radius; sm.height = radius * height_r
 	sm.radial_segments = segs; sm.rings = rings
 	var mi := MeshInstance3D.new()
@@ -1213,16 +1224,14 @@ func _block_rubble(blk: Array) -> void:
 		add_child(rm)
 
 func _hq_zone(pos: Vector3, color: Color, _label: String) -> void:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	var disc := MeshInstance3D.new()
-	disc.mesh = CylinderMesh.new()
-	(disc.mesh as CylinderMesh).top_radius = 3.5
-	(disc.mesh as CylinderMesh).bottom_radius = 3.5
-	(disc.mesh as CylinderMesh).height = 0.06
-	(disc.mesh as CylinderMesh).radial_segments = 24
+	var mat := ShaderMaterial.new()
+	mat.shader = _SHADER_ZONE_PULSE
+	mat.set_shader_parameter("zone_color", color)
+	mat.set_shader_parameter("pulse_speed", 1.6)
+	mat.set_shader_parameter("ring_count",  2.5)
+	var cm := CylinderMesh.new()
+	cm.top_radius = 3.5; cm.bottom_radius = 3.5; cm.height = 0.06; cm.radial_segments = 48
+	var disc := MeshInstance3D.new(); disc.mesh = cm
 	disc.set_surface_override_material(0, mat)
 	disc.position = Vector3(pos.x, 0.03, pos.z)
 	add_child(disc)
@@ -3096,7 +3105,12 @@ func _spawn_muzzle(from: Vector3, to: Vector3) -> void:
 	mat.albedo_color = Color(1.0,0.92,0.5)
 	mat.emission_enabled = true; mat.emission = Color(1.0,0.7,0.2)*4.0
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	var flash := _box(Vector3(0.14,0.14,0.14), mat)
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	var fsm := SphereMesh.new()
+	fsm.radius = 0.22; fsm.height = 0.44
+	fsm.radial_segments = 8; fsm.rings = 5
+	var flash := MeshInstance3D.new(); flash.mesh = fsm
+	flash.set_surface_override_material(0, mat)
 	flash.position = from; add_child(flash)
 	get_tree().create_timer(0.06).timeout.connect(func()->void: if is_instance_valid(flash): flash.queue_free())
 	# Muzzle light — illuminates nearby geometry and units for one frame
@@ -3756,13 +3770,11 @@ func _setup_hud() -> void:
 	dz_mesh.height        = 0.06
 	dz_mesh.radial_segments = 48
 	dz_mesh.rings = 1
-	var dz_mat := StandardMaterial3D.new()
-	dz_mat.albedo_color     = Color(0.30, 1.0, 0.43, 0.22)
-	dz_mat.transparency     = BaseMaterial3D.TRANSPARENCY_ALPHA
-	dz_mat.shading_mode     = BaseMaterial3D.SHADING_MODE_UNSHADED
-	dz_mat.depth_draw_mode  = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	dz_mat.cull_mode        = BaseMaterial3D.CULL_DISABLED
-	dz_mat.render_priority  = 1
+	var dz_mat := ShaderMaterial.new()
+	dz_mat.shader = _SHADER_ZONE_PULSE
+	dz_mat.set_shader_parameter("zone_color", Color(0.30, 1.0, 0.43, 0.22))
+	dz_mat.set_shader_parameter("pulse_speed", 1.8)
+	dz_mat.set_shader_parameter("ring_count",  3.0)
 	_deploy_zone = MeshInstance3D.new()
 	_deploy_zone.mesh = dz_mesh
 	_deploy_zone.set_surface_override_material(0, dz_mat)
