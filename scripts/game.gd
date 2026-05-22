@@ -267,19 +267,18 @@ func _build_world() -> void:
 		var img := Image.new()
 		if img.load_jpg_from_buffer(sat_raw as PackedByteArray) == OK:
 			_sat_img = img  # store for tree-type inference during world build
+			print("SAT: loaded %dx%d JPEG, mid=%s" % [
+				img.get_width(), img.get_height(),
+				str(img.get_pixel(img.get_width()/2, img.get_height()/2))])
 			var sat_mat := StandardMaterial3D.new()
-			sat_mat.albedo_texture = ImageTexture.create_from_image(img)
-			# PBR shading so the satellite photo responds to sun and SDFGI
-			sat_mat.roughness  = 0.88
-			sat_mat.metallic   = 0.0
-			sat_mat.specular   = 0.12
-			# Depth handling: disable depth writes so the plane never competes
-			# in the prepass against the ground (y=0) or tree crown phantom
-			# depths. render_priority=1 places it after all priority-0 opaque
-			# geometry; depth testing remains active so buildings / tree leaves /
-			# roads still correctly occlude the overlay.
+			sat_mat.albedo_texture  = ImageTexture.create_from_image(img)
+			# Unshaded: render raw satellite photo colors with no PBR lighting.
+			# Sun energy 2.4 blows out any lit horizontal plane to white.
+			sat_mat.shading_mode    = BaseMaterial3D.SHADING_MODE_UNSHADED
+			# Disable depth writes so the plane never competes in the prepass.
+			# Depth testing remains active so buildings / roads occlude it.
 			sat_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-			sat_mat.render_priority  = 1
+			sat_mat.render_priority = 1
 			var pm := PlaneMesh.new()
 			pm.size = Vector2(HALF * 2.0, HALF * 2.0)
 			pm.subdivide_width  = 4

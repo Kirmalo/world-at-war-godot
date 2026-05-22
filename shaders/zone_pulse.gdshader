@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode blend_mix, depth_draw_disabled, cull_disabled, unshaded;
+render_mode blend_mix, cull_disabled, unshaded;
 
 uniform vec4 zone_color : source_color = vec4(0.3, 1.0, 0.43, 0.22);
 uniform float pulse_speed : hint_range(0.5, 4.0) = 1.6;
