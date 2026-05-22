@@ -261,36 +261,42 @@ func _build_world() -> void:
 	gnd.set_surface_override_material(0, _ground_mat)
 	gnd.position = Vector3(0.0, -0.06, 0.0)
 	add_child(gnd)
-	# Satellite photo overlay — covers exact play area when image data is available
+	# TRIAL 3: diagnostic prints + unconditional floating cyan plane so we can
+	# confirm the rendering pipeline independently of satellite data loading.
 	var sat_raw = main.get("sat_image_data")
+	print("SAT DBG sat_raw type=%s  size=%d" % [
+		typeof(sat_raw), (sat_raw as PackedByteArray).size() if sat_raw is PackedByteArray else -1])
+	# Floating test plane at y=2.0 — above all buildings, always visible if
+	# the rendering pipeline is working.  Remove after diagnosis.
+	var _dbg_mat := StandardMaterial3D.new()
+	_dbg_mat.shading_mode  = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_dbg_mat.albedo_color  = Color(1.0, 0.0, 1.0)   # magenta
+	var _dbg_pm := PlaneMesh.new(); _dbg_pm.size = Vector2(HALF * 2.0, HALF * 2.0)
+	var _dbg_plane := MeshInstance3D.new(); _dbg_plane.mesh = _dbg_pm
+	_dbg_plane.set_surface_override_material(0, _dbg_mat)
+	_dbg_plane.position = Vector3(0.0, 2.0, 0.0)
+	add_child(_dbg_plane)
+	# Real satellite overlay — only created when data is available
 	if sat_raw is PackedByteArray and (sat_raw as PackedByteArray).size() > 0:
 		var img := Image.new()
-		if img.load_jpg_from_buffer(sat_raw as PackedByteArray) == OK:
-			_sat_img = img  # store for tree-type inference during world build
+		var load_err := img.load_jpg_from_buffer(sat_raw as PackedByteArray)
+		print("SAT DBG jpeg_load err=%d  size=%dx%d" % [load_err, img.get_width(), img.get_height()])
+		if load_err == OK:
+			_sat_img = img
 			var sat_mat := StandardMaterial3D.new()
-			# TRIAL 2: ignore the loaded texture entirely — use a flat cyan so we
-			# can tell the plane from a white fog/ground. If you see cyan the plane
-			# is rendering fine and the fault is in the texture data. If still white
-			# something else is covering the plane entirely.
-			sat_mat.shading_mode   = BaseMaterial3D.SHADING_MODE_UNSHADED
-			sat_mat.albedo_color   = Color(0.0, 1.0, 1.0)   # cyan sentinel
+			sat_mat.shading_mode    = BaseMaterial3D.SHADING_MODE_UNSHADED
+			sat_mat.albedo_color    = Color(0.0, 1.0, 1.0)   # cyan sentinel (trial)
 			sat_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-			sat_mat.render_priority  = 1
-			print("SAT DBG img size=%dx%d  mid-pixel=%s" % [
-				img.get_width(), img.get_height(),
-				str(img.get_pixel(img.get_width() / 2, img.get_height() / 2))])
+			sat_mat.render_priority = 1
 			var pm := PlaneMesh.new()
 			pm.size = Vector2(HALF * 2.0, HALF * 2.0)
-			pm.subdivide_width  = 4
-			pm.subdivide_depth  = 4
+			pm.subdivide_width = 4; pm.subdivide_depth = 4
 			var sat_plane := MeshInstance3D.new()
 			sat_plane.mesh = pm
 			sat_plane.set_surface_override_material(0, sat_mat)
-			# y=0.01: clear of the ground top-face (y=0) so the depth test always
-			# passes over bare ground, while geometry at y≥0.02 (roads, buildings)
-			# remains correctly in front.
 			sat_plane.position = Vector3(0.0, 0.01, 0.0)
 			add_child(sat_plane)
+			print("SAT DBG plane added at y=0.01")
 
 	tmap.clear()
 	for r in TG:
