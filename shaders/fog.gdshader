@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode blend_mix, depth_draw_disabled, cull_back, unshaded;
+render_mode blend_mix, cull_back, unshaded;
 
 uniform sampler2D fog_texture : hint_default_white, filter_linear;
 
