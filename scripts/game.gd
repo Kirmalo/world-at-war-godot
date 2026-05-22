@@ -268,13 +268,17 @@ func _build_world() -> void:
 		if img.load_jpg_from_buffer(sat_raw as PackedByteArray) == OK:
 			_sat_img = img  # store for tree-type inference during world build
 			var sat_mat := StandardMaterial3D.new()
-			sat_mat.albedo_texture = ImageTexture.create_from_image(img)
-			# TRIAL 1: unshaded — bypass all PBR lighting so the raw satellite
-			# photo is displayed at face value. If the ground now shows the aerial
-			# image instead of white, the PBR sun (2.4 energy) was washing it out.
+			# TRIAL 2: ignore the loaded texture entirely — use a flat cyan so we
+			# can tell the plane from a white fog/ground. If you see cyan the plane
+			# is rendering fine and the fault is in the texture data. If still white
+			# something else is covering the plane entirely.
 			sat_mat.shading_mode   = BaseMaterial3D.SHADING_MODE_UNSHADED
+			sat_mat.albedo_color   = Color(0.0, 1.0, 1.0)   # cyan sentinel
 			sat_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 			sat_mat.render_priority  = 1
+			print("SAT DBG img size=%dx%d  mid-pixel=%s" % [
+				img.get_width(), img.get_height(),
+				str(img.get_pixel(img.get_width() / 2, img.get_height() / 2))])
 			var pm := PlaneMesh.new()
 			pm.size = Vector2(HALF * 2.0, HALF * 2.0)
 			pm.subdivide_width  = 4
