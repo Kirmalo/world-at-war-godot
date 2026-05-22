@@ -267,15 +267,14 @@ func _build_world() -> void:
 		var img := Image.new()
 		if img.load_jpg_from_buffer(sat_raw as PackedByteArray) == OK:
 			_sat_img = img  # store for tree-type inference during world build
+			print("SAT: loaded %dx%d JPEG, mid=%s" % [
+				img.get_width(), img.get_height(),
+				str(img.get_pixel(img.get_width()/2, img.get_height()/2))])
 			var sat_mat := StandardMaterial3D.new()
 			sat_mat.albedo_texture  = ImageTexture.create_from_image(img)
-			sat_mat.roughness       = 0.88
-			sat_mat.metallic        = 0.0
-			sat_mat.specular        = 0.12
-			# DEPTH_DRAW_DISABLED: keeps the plane out of the depth prepass so it
-			# never races the ground (y=0) or tree-crown phantom depths.
-			# render_priority=1: draws after all priority-0 opaque geometry;
-			# depth test still active so buildings/roads correctly occlude it.
+			# TRIAL 4: unshaded so the raw satellite photo renders at face value.
+			# The sun energy (2.4) blows out any lit horizontal plane to white.
+			sat_mat.shading_mode    = BaseMaterial3D.SHADING_MODE_UNSHADED
 			sat_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 			sat_mat.render_priority = 1
 			var pm := PlaneMesh.new()
