@@ -3752,8 +3752,8 @@ func _input(event: InputEvent) -> void:
 			var dist_prv := a_prv.distance_to(b_prv)
 			var ang_cur  := atan2(b_cur.y - a_cur.y, b_cur.x - a_cur.x)
 			var ang_prv  := atan2(b_prv.y - a_prv.y, b_prv.x - a_prv.x)
-			# Pinch → zoom
-			if dist_prv > 5.0:
+			# Pinch → zoom (guard both distances to avoid near-zero division)
+			if dist_prv > 5.0 and dist_cur > 5.0:
 				cam_zoom = clampf(cam_zoom * (dist_prv / dist_cur), 10.0, 55.0)
 			# Twist → rotate
 			var dang := ang_cur - ang_prv
