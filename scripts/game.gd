@@ -88,6 +88,7 @@ var deploying_kind: String = ""
 var supplies: int      = 300
 var wave_num: int      = 0
 var wave_timer: float  = 50.0
+var _wave_cap: int     = 0    # 0 = full WAVE_DEFS; set from main.campaign_wave_cap
 var game_active: bool  = false
 var kill_count: int    = 0
 var supply_accum: float = 0.0
@@ -256,6 +257,9 @@ func _do_ready_async() -> void:
 	match _diff:
 		"easy": supplies = 375; wave_timer = 60.0
 		"hard": supplies = 225; wave_timer = 40.0
+	# Apply campaign wave cap (0 = no cap / use full WAVE_DEFS)
+	var _cap_raw = _main().get("campaign_wave_cap")
+	_wave_cap = int(_cap_raw) if _cap_raw != null else 0
 	game_active = true
 	_set_status("DEFEND THE NEIGHBORHOOD  |  TAP TO SELECT AND COMMAND")
 	if not FileAccess.file_exists("user://tutorial_done"):
@@ -2301,10 +2305,16 @@ func _process(delta: float) -> void:
 	_update_capture_points(delta)
 	_update_hud()
 
+func _effective_wave_count() -> int:
+	if _wave_cap > 0:
+		return mini(_wave_cap, WAVE_DEFS.size())
+	return WAVE_DEFS.size()
+
 func _update_wave(delta: float) -> void:
 	wave_timer -= delta
+	var eff_waves := _effective_wave_count()
 	# Clear bonus: cap wait to 10s once the field is clear
-	if wave_num > 0 and wave_num < WAVE_DEFS.size() and wave_timer > 10.0:
+	if wave_num > 0 and wave_num < eff_waves and wave_timer > 10.0:
 		var has_enemies := false
 		for u in units:
 			var ue := u as Unit
@@ -2315,13 +2325,13 @@ func _update_wave(delta: float) -> void:
 			if _wave_clear_notified < wave_num:
 				_wave_clear_notified = wave_num
 				_flash_wave_clear(wave_num)
-	if wave_timer <= 0.0 and wave_num < WAVE_DEFS.size():
+	if wave_timer <= 0.0 and wave_num < eff_waves:
 		_launch_wave()
 		match (_main().get("difficulty") as String):
 			"easy": wave_timer = 60.0
 			"hard": wave_timer = 40.0
 			_:      wave_timer = 50.0
-	elif wave_num >= WAVE_DEFS.size():
+	elif wave_num >= eff_waves:
 		var enemies_left := units.filter(func(u): return (u as Unit) != null and (u as Unit).team == "enemy" and (u as Unit).hp > 0)
 		if enemies_left.is_empty():
 			_show_endgame(true)
@@ -4102,6 +4112,17 @@ func _show_endgame(victory: bool) -> void:
 	game_active = false
 	_save_score(victory)
 	Sounds.play("victory" if victory else "defeat", 0.0)
+
+	# ── Campaign mode: route to post-mission brief instead of endgame panel ──
+	var mn := _main()
+	if mn.get("campaign_mode") == true:
+		mn.set("campaign_mode", false)
+		# Brief on-screen pause so the player knows the battle ended before the
+		# screen fades to the debrief — 2 seconds feels right.
+		await get_tree().create_timer(2.2).timeout
+		mn.campaign_mission_complete(victory, kill_count, _units_lost)
+		return
+
 	var panel := $HUD/EndgamePanel as Control
 	if panel == null: return
 	panel.visible = true
@@ -4117,14 +4138,14 @@ func _show_endgame(victory: bool) -> void:
 		title.text     = "NEIGHBORHOOD DEFENDED!"
 		title.modulate = Color(0.3, 1.0, 0.43)
 		sub.text       = ("Waves repelled: %d / %d\nEnemy KIA: %d   Defenders lost: %d\nCPs held: %d / %d   Supplies: %d   Time: %d:%02d"
-			% [WAVE_DEFS.size(), WAVE_DEFS.size(), kill_count, _units_lost,
+			% [_effective_wave_count(), _effective_wave_count(), kill_count, _units_lost,
 			   cp_held, capture_points.size(), supplies, elapsed_min, elapsed_s])
 	else:
 		title.text     = "THE NEIGHBORHOOD HAS FALLEN"
 		title.modulate = Color(1.0, 0.3, 0.2)
 		var reason: String = "HQ destroyed." if hq_hp <= 0 else "Last defender fell."
 		sub.text       = ("%s\nWave %d / %d reached   Enemy KIA: %d   Defenders lost: %d\nCPs held: %d / %d   Supplies: %d   Time: %d:%02d"
-			% [reason, wave_num, WAVE_DEFS.size(), kill_count, _units_lost,
+			% [reason, wave_num, _effective_wave_count(), kill_count, _units_lost,
 			   cp_held, capture_points.size(), supplies, elapsed_min, elapsed_s])
 
 # ── HUD ───────────────────────────────────────────────────────
@@ -4452,8 +4473,8 @@ func _update_hud() -> void:
 	res_label.text = "SUPPLIES: %d  (+%d/s)" % [supplies, income_rate]
 	# Wave timer color coding
 	var t_left := maxi(0, int(wave_timer))
-	wave_label.text = "WAVE %d/%d  |  %ds" % [wave_num, WAVE_DEFS.size(), t_left]
-	if wave_num >= WAVE_DEFS.size():
+	wave_label.text = "WAVE %d/%d  |  %ds" % [wave_num, _effective_wave_count(), t_left]
+	if wave_num >= _effective_wave_count():
 		wave_label.modulate = Color(1.0, 1.0, 1.0)
 	elif t_left < 8:
 		wave_label.modulate = Color(1.0, 0.28, 0.18)

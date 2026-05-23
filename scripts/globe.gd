@@ -29,6 +29,7 @@ var _locs: Array = []
 var _last_search: String = ""
 var _check_lat: float = 0.0
 var _check_lon: float = 0.0
+var _campaign_city_select: bool = false  # true when opened for campaign home-city pick
 
 @onready var location_list:  ItemList = $VBox/LocationList
 @onready var search_edit:    LineEdit = $VBox/SearchBox/SearchEdit
@@ -56,6 +57,11 @@ func _ready() -> void:
 	_pulse_generate_btn()
 	_setup_difficulty_btns()
 	_setup_time_btns()
+	_setup_campaign_btn()
+	# If we arrived here because main.gd wants a campaign city selection,
+	# update the UI to show a campaign-confirm button instead of Generate.
+	if has_meta("campaign_city_select") and bool(get_meta("campaign_city_select")):
+		_enter_campaign_city_select_mode()
 
 func _style_generate_btn() -> void:
 	var norm := StyleBoxFlat.new()
@@ -255,7 +261,71 @@ func _refresh_time_btns(btns: Array, times: Array, active: String) -> void:
 		b.modulate = Color(1.4, 1.4, 1.4) if times[i] == active else Color(0.6, 0.6, 0.6)
 
 func _on_generate() -> void:
-	_main().show_generation()
+	if _campaign_city_select:
+		_on_confirm_campaign_city()
+	else:
+		_main().show_generation()
+
+# ── CAMPAIGN BUTTON + CITY-SELECT MODE ────────────────────────────────────────
+
+func _setup_campaign_btn() -> void:
+	var btn := $VBox/CampaignBtn as Button
+	if btn == null: return
+	# Style similar to generate_btn but with a different accent
+	var norm := StyleBoxFlat.new()
+	norm.bg_color = Color(0.10, 0.06, 0.02, 0.95)
+	norm.border_color = Color(0.85, 0.60, 0.18, 1.0)
+	norm.set_border_width_all(2); norm.border_width_left = 5
+	norm.set_corner_radius_all(4)
+	norm.content_margin_left = 24; norm.content_margin_right = 24
+	norm.content_margin_top = 10; norm.content_margin_bottom = 10
+	var hov := norm.duplicate() as StyleBoxFlat
+	hov.bg_color     = Color(0.16, 0.10, 0.03, 0.98)
+	hov.border_color = Color(1.00, 0.80, 0.25, 1.0)
+	btn.add_theme_stylebox_override("normal", norm)
+	btn.add_theme_stylebox_override("hover",  hov)
+	btn.add_theme_stylebox_override("pressed", hov)
+	btn.add_theme_color_override("font_color",       Color(0.90, 0.70, 0.22))
+	btn.add_theme_color_override("font_hover_color", Color(1.00, 0.85, 0.35))
+	btn.focus_mode = Control.FOCUS_NONE
+	_update_campaign_btn_label(btn)
+	btn.pressed.connect(func()->void: Sounds.play("click"); _main().show_campaign_start())
+
+func _update_campaign_btn_label(btn: Button) -> void:
+	if Campaign.prologue_done:
+		btn.text = "🌍  WORLD THEATER"
+	elif Campaign.in_campaign:
+		var idx: int = Campaign.current_mission
+		btn.text = "⚔  RESUME CAMPAIGN  (MISSION %d/5)" % (idx + 1)
+	else:
+		btn.text = "⚔  CAMPAIGN MODE"
+
+## Called when globe was opened specifically for campaign home-city selection.
+func _enter_campaign_city_select_mode() -> void:
+	_campaign_city_select = true
+	# Relabel the generate button — pressed signal already routes through _on_generate()
+	# which now checks _campaign_city_select and calls _on_confirm_campaign_city().
+	generate_btn.text = "⚔  BEGIN CAMPAIGN HERE"
+	generate_btn.add_theme_color_override("font_color",       Color(0.90, 0.68, 0.20))
+	generate_btn.add_theme_color_override("font_hover_color", Color(1.00, 0.82, 0.30))
+	subtitle_label.text = "CHOOSE YOUR HOME CITY — THIS WILL BE YOUR FIRST BATTLE"
+	subtitle_label.add_theme_color_override("font_color", Color(0.90, 0.70, 0.22))
+	# Hide the campaign button so only the confirm button is shown
+	var campaign_btn := $VBox/CampaignBtn as Button
+	if campaign_btn:
+		campaign_btn.visible = false
+
+func _on_confirm_campaign_city() -> void:
+	var mn := _main()
+	# Find the canonical LOCATIONS index by matching lat/lon
+	var city_idx := 0
+	for i in LOCATIONS.size():
+		var loc: Dictionary = LOCATIONS[i]
+		if absf(float(loc.lat) - mn.active_lat) < 0.001 and \
+		   absf(float(loc.lon) - mn.active_lon) < 0.001:
+			city_idx = i
+			break
+	mn.campaign_begin_with_city(city_idx, mn.active_name, mn.active_lat, mn.active_lon)
 
 func _main() -> Node:
 	return get_tree().root.get_node("Main")
