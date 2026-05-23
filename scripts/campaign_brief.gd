@@ -124,7 +124,7 @@ func _build_ui() -> void:
 	centre.add_child(_speaker_lbl)
 
 	_text_lbl = RichTextLabel.new()
-	_text_lbl.use_bbcode     = false
+	_text_lbl.bbcode_enabled = false
 	_text_lbl.fit_content    = false
 	_text_lbl.scroll_active  = false
 	_text_lbl.custom_minimum_size = Vector2(0, 200)
