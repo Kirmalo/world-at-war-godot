@@ -617,6 +617,15 @@ func _build_osm_buildings() -> void:
 	var cos_lat := cos(deg_to_rad(clat))
 	var scale   := HALF / 100.0
 
+	# The AI-raster building tiles (from _build_from_grid) are coarse (10 m per tile).
+	# Adjacent buildings can merge their footprints, blocking visual gaps.
+	# Clear all AI-raster TILE_BUILDING cells now; we will re-stamp them below using
+	# the exact OSM polygon in world-space, matching what the 3D mesh occupies.
+	for _r in TG:
+		for _c in TG:
+			if tmap[_r][_c] == TILE_BUILDING:
+				tmap[_r][_c] = TILE_GROUND
+
 	var sat_img: Image = null
 	var sat_raw = mn.get("sat_image_data")
 	if sat_raw is PackedByteArray and (sat_raw as PackedByteArray).size() > 0:
@@ -682,11 +691,23 @@ func _build_osm_buildings() -> void:
 		for p: Vector2 in pts: centroid += p
 		centroid /= float(pts.size())
 
-		# tmap is already populated correctly by _build_from_grid (AI raster grid);
-		# just stamp the centroid so trees don't plant inside this footprint.
-		var btr := clampi(int((centroid.y + HALF) / TCELL), 0, TG - 1)
-		var btc := clampi(int((centroid.x + HALF) / TCELL), 0, TG - 1)
-		tmap[btr][btc] = TILE_BUILDING
+		# Stamp tmap exactly from the OSM polygon in world-space.
+		# This replaces the coarse AI-raster approximation (cleared above) so the
+		# pathfinder sees blocked tiles that match the visible 3D mesh — no more
+		# phantom walls closing a gap that exists, nor phantom passes through solid walls.
+		var bmin_x := INF;  var bmax_x := -INF
+		var bmin_z := INF;  var bmax_z := -INF
+		for p: Vector2 in pts:
+			bmin_x = minf(bmin_x, p.x); bmax_x = maxf(bmax_x, p.x)
+			bmin_z = minf(bmin_z, p.y); bmax_z = maxf(bmax_z, p.y)
+		var bc0 := clampi(int((bmin_x + HALF) / TCELL), 0, TG - 1)
+		var bc1 := clampi(int((bmax_x + HALF) / TCELL), 0, TG - 1)
+		var br0 := clampi(int((bmin_z + HALF) / TCELL), 0, TG - 1)
+		var br1 := clampi(int((bmax_z + HALF) / TCELL), 0, TG - 1)
+		for bmr in range(br0, br1 + 1):
+			for bmc in range(bc0, bc1 + 1):
+				if _world_pip(_tx(bmc), _tz(bmr), pts):
+					tmap[bmr][bmc] = TILE_BUILDING
 
 		# Sample satellite image at building centroid for realistic base colors
 		var sat_col := Color(0.62, 0.58, 0.54)
