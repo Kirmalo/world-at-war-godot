@@ -313,46 +313,108 @@ func _build_world() -> void:
 	_setup_environment()
 
 func _setup_environment() -> void:
-	# Primary sun — warm afternoon angle, sharp shadows with PCF5 softening
+	var tod: String = str(_main().get("time_of_day") if _main() != null else "day")
+
+	# ── Per-time-of-day parameters ─────────────────────────────────
+	var sun_color    : Color; var sun_energy  : float; var sun_rot       : Vector3
+	var fill_color   : Color; var fill_energy : float
+	var sky_top      : Color; var sky_horizon : Color
+	var gnd_bottom   : Color; var gnd_horizon : Color
+	var sun_angle_max: float
+	var fog_col      : Color; var fog_density : float
+	var vfog_albedo  : Color; var vfog_emit   : Color
+	var exposure     : float; var tone_white  : float
+	var saturation   : float; var ambient_e   : float
+	var contrast     : float; var ssao_int    : float
+	var glow_int     : float; var glow_thresh : float; var glow_scale : float
+
+	match tod:
+		"night":
+			# Moonlight — pale blue-white, low energy, different angle
+			sun_color     = Color(0.55, 0.65, 0.90); sun_energy   = 0.30
+			sun_rot       = Vector3(-55.0, 120.0, 0.0)
+			fill_color    = Color(0.10, 0.12, 0.28); fill_energy  = 0.06
+			sky_top       = Color(0.01, 0.01, 0.05); sky_horizon  = Color(0.02, 0.03, 0.12)
+			gnd_bottom    = Color(0.01, 0.01, 0.02); gnd_horizon  = Color(0.02, 0.02, 0.04)
+			sun_angle_max = 3.0
+			fog_col       = Color(0.03, 0.04, 0.12); fog_density  = 0.012
+			vfog_albedo   = Color(0.08, 0.10, 0.22); vfog_emit    = Color(0.02, 0.02, 0.08) * 0.02
+			exposure      = 0.78;                    tone_white   = 3.0
+			saturation    = 0.55;                    ambient_e    = 0.18
+			contrast      = 1.18;                    ssao_int     = 3.2
+			glow_int      = 0.90;                    glow_thresh  = 0.55;   glow_scale = 3.5
+		"dusk":
+			# Low orange sun near the horizon, purple fill from opposite sky
+			sun_color     = Color(1.00, 0.55, 0.18); sun_energy   = 1.60
+			sun_rot       = Vector3(-14.0, -32.0, 0.0)
+			fill_color    = Color(0.55, 0.35, 0.65); fill_energy  = 0.22
+			sky_top       = Color(0.04, 0.06, 0.22); sky_horizon  = Color(0.85, 0.38, 0.08)
+			gnd_bottom    = Color(0.04, 0.02, 0.02); gnd_horizon  = Color(0.35, 0.15, 0.05)
+			sun_angle_max = 12.0
+			fog_col       = Color(0.70, 0.42, 0.20); fog_density  = 0.008
+			vfog_albedo   = Color(0.82, 0.52, 0.20); vfog_emit    = Color(0.55, 0.25, 0.05) * 0.08
+			exposure      = 0.95;                    tone_white   = 6.0
+			saturation    = 0.72;                    ambient_e    = 0.35
+			contrast      = 1.12;                    ssao_int     = 2.4
+			glow_int      = 0.70;                    glow_thresh  = 0.72;   glow_scale = 2.8
+		_:  # "day"
+			# Warm afternoon sun, cool sky fill
+			sun_color     = Color(1.00, 0.93, 0.78); sun_energy   = 2.40
+			sun_rot       = Vector3(-50.0, -32.0, 0.0)
+			fill_color    = Color(0.38, 0.54, 0.84); fill_energy  = 0.30
+			sky_top       = Color(0.10, 0.20, 0.50); sky_horizon  = Color(0.60, 0.68, 0.80)
+			gnd_bottom    = Color(0.06, 0.07, 0.05); gnd_horizon  = Color(0.32, 0.35, 0.26)
+			sun_angle_max = 6.0
+			fog_col       = Color(0.56, 0.60, 0.64); fog_density  = 0.002
+			vfog_albedo   = Color(0.84, 0.82, 0.80); vfog_emit    = Color(0.28, 0.26, 0.22) * 0.03
+			exposure      = 1.05;                    tone_white   = 5.5
+			saturation    = 0.82;                    ambient_e    = 0.50
+			contrast      = 1.08;                    ssao_int     = 2.0
+			glow_int      = 0.55;                    glow_thresh  = 0.80;   glow_scale = 2.4
+
+	# ── Primary sun / moon ─────────────────────────────────────────
 	var sun := DirectionalLight3D.new()
-	sun.light_color   = Color(1.00, 0.93, 0.78)
-	sun.light_energy  = 2.4
+	sun.light_color   = sun_color
+	sun.light_energy  = sun_energy
 	sun.shadow_enabled = true
-	sun.directional_shadow_mode         = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	# Night uses simpler shadow cascade (moon gives soft, low-contrast shadows)
+	sun.directional_shadow_mode         = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if tod == "night" \
+	                                      else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 80.0
 	sun.directional_shadow_fade_start   = 0.92
 	sun.shadow_bias                     = 0.008
 	sun.shadow_normal_bias              = 1.2
-	sun.rotation_degrees = Vector3(-50.0, -32.0, 0.0)
+	sun.rotation_degrees                = sun_rot
 	add_child(sun)
 
-	# Cool sky fill — softens shadow side, adds depth
+	# ── Sky fill ───────────────────────────────────────────────────
 	var fill := DirectionalLight3D.new()
-	fill.light_color  = Color(0.38, 0.54, 0.84)
-	fill.light_energy = 0.30
-	fill.shadow_enabled = false
+	fill.light_color      = fill_color
+	fill.light_energy     = fill_energy
+	fill.shadow_enabled   = false
 	fill.rotation_degrees = Vector3(-18.0, 148.0, 0.0)
 	add_child(fill)
 
+	# ── Sky ────────────────────────────────────────────────────────
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color        = Color(0.10, 0.20, 0.50)
-	sky_mat.sky_horizon_color    = Color(0.60, 0.68, 0.80)
-	sky_mat.ground_bottom_color  = Color(0.06, 0.07, 0.05)
-	sky_mat.ground_horizon_color = Color(0.32, 0.35, 0.26)
-	sky_mat.sun_angle_max        = 6.0   # wider, softer sun disk
+	sky_mat.sky_top_color        = sky_top
+	sky_mat.sky_horizon_color    = sky_horizon
+	sky_mat.ground_bottom_color  = gnd_bottom
+	sky_mat.ground_horizon_color = gnd_horizon
+	sky_mat.sun_angle_max        = sun_angle_max
 	sky_mat.sun_curve            = 0.10
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 
 	var env := Environment.new()
-	env.background_mode       = Environment.BG_SKY
-	env.sky                   = sky
-	env.ambient_light_source  = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy  = 0.50
+	env.background_mode      = Environment.BG_SKY
+	env.sky                  = sky
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy = ambient_e
 
 	env.tonemap_mode     = Environment.TONE_MAPPER_FILMIC
-	env.tonemap_exposure = 1.05
-	env.tonemap_white    = 5.5
+	env.tonemap_exposure = exposure
+	env.tonemap_white    = tone_white
 
 	# SDFGI — proper indirect GI bounce off buildings and ground
 	env.sdfgi_enabled       = true
@@ -363,7 +425,7 @@ func _setup_environment() -> void:
 
 	env.ssao_enabled   = true
 	env.ssao_radius    = 1.2
-	env.ssao_intensity = 2.0
+	env.ssao_intensity = ssao_int
 	env.ssao_power     = 1.4
 	env.ssao_sharpness = 0.98
 
@@ -371,13 +433,14 @@ func _setup_environment() -> void:
 	env.ssil_radius    = 5.0
 	env.ssil_intensity = 0.7
 
+	# Glow — night/dusk has lower threshold so artificial lights bloom more
 	env.glow_enabled       = true
 	env.glow_normalized    = false
-	env.glow_intensity     = 0.55
+	env.glow_intensity     = glow_int
 	env.glow_bloom         = 0.08
 	env.glow_blend_mode    = Environment.GLOW_BLEND_MODE_SOFTLIGHT
-	env.glow_hdr_threshold = 0.80
-	env.glow_hdr_scale     = 2.4
+	env.glow_hdr_threshold = glow_thresh
+	env.glow_hdr_scale     = glow_scale
 	# Level 1 = tight corona around lights; level 3 = medium bloom; level 6 = wide haze
 	env.set_glow_level(0, 0.70)
 	env.set_glow_level(1, 0.00)
@@ -389,16 +452,16 @@ func _setup_environment() -> void:
 
 	# Analytical fog (sky haze)
 	env.fog_enabled            = true
-	env.fog_light_color        = Color(0.56, 0.60, 0.64)
-	env.fog_density            = 0.002
+	env.fog_light_color        = fog_col
+	env.fog_density            = fog_density
 	env.fog_aerial_perspective = 0.25
 
 	# Volumetric fog — depth, building occlusion, light shaft interaction
-	env.volumetric_fog_enabled   = true
-	env.volumetric_fog_density   = 0.010
-	env.volumetric_fog_albedo    = Color(0.84, 0.82, 0.80)
-	env.volumetric_fog_emission  = Color(0.28, 0.26, 0.22) * 0.03
-	env.volumetric_fog_gi_inject = 0.8
+	env.volumetric_fog_enabled    = true
+	env.volumetric_fog_density    = 0.010
+	env.volumetric_fog_albedo     = vfog_albedo
+	env.volumetric_fog_emission   = vfog_emit
+	env.volumetric_fog_gi_inject  = 0.8
 	env.volumetric_fog_anisotropy = 0.20
 
 	env.ssr_enabled         = true
@@ -407,11 +470,11 @@ func _setup_environment() -> void:
 	env.ssr_fade_out        = 2.0
 	env.ssr_depth_tolerance = 0.2
 
-	# Subtle color grading — desaturated, gritty war palette
-	env.adjustment_enabled     = true
-	env.adjustment_brightness  = 1.0
-	env.adjustment_contrast    = 1.08
-	env.adjustment_saturation  = 0.82
+	# Color grading — desaturated gritty war palette; night is darker and flatter
+	env.adjustment_enabled    = true
+	env.adjustment_brightness = 1.0
+	env.adjustment_contrast   = contrast
+	env.adjustment_saturation = saturation
 
 	# ── Mobile render tier — strip expensive effects on handheld ──
 	_on_mobile = OS.has_feature("mobile") or OS.get_name() in ["Android", "iOS"]
@@ -758,6 +821,15 @@ func _add_windows(px: float, pz: float, h: float, bw: float, bd: float, frame_co
 	var ww := 0.22; var wh := 0.30; var wd := 0.05
 	var win_mat := _mat_new(Color(0.35,0.48,0.58,0.85))
 	win_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	# At dusk/night windows glow with warm interior light
+	var tod: String = str(_main().get("time_of_day") if _main() != null else "day")
+	match tod:
+		"dusk":
+			win_mat.emission_enabled = true
+			win_mat.emission         = Color(1.0, 0.85, 0.55) * 1.8
+		"night":
+			win_mat.emission_enabled = true
+			win_mat.emission         = Color(1.0, 0.85, 0.55) * 6.0
 	var frame_mat := _mat(frame_col)
 	var floors := int(h / 1.2)
 	for fl in range(1, floors):
@@ -1140,17 +1212,22 @@ func _place_street_light(px: float, pz: float) -> void:
 	pole.position = Vector3(px, 2.0, pz); add_child(pole)
 	var arm := _box(Vector3(0.90, 0.06, 0.06), _mat(Color(0.58, 0.58, 0.55)))
 	arm.position = Vector3(px+0.45, 3.96, pz); add_child(arm)
+	# Scale lamp brightness with time of day — at night lights are the primary source
+	var tod: String = str(_main().get("time_of_day") if _main() != null else "day")
+	var lamp_emit  := 3.0  if tod == "day" else (8.0  if tod == "dusk" else 18.0)
+	var omni_energy := 1.4 if tod == "day" else (3.5  if tod == "dusk" else 7.0)
+	var omni_range  := 9.0 if tod == "day" else (12.0 if tod == "dusk" else 16.0)
 	var lamp_mat := StandardMaterial3D.new()
-	lamp_mat.albedo_color    = Color(1.0, 0.94, 0.78)
+	lamp_mat.albedo_color     = Color(1.0, 0.94, 0.78)
 	lamp_mat.emission_enabled = true
-	lamp_mat.emission        = Color(1.0, 0.88, 0.62) * 3.0
-	lamp_mat.shading_mode    = BaseMaterial3D.SHADING_MODE_UNSHADED
+	lamp_mat.emission         = Color(1.0, 0.88, 0.62) * lamp_emit
+	lamp_mat.shading_mode     = BaseMaterial3D.SHADING_MODE_UNSHADED
 	var lamp := _box(Vector3(0.24, 0.12, 0.24), lamp_mat)
 	lamp.position = Vector3(px+0.92, 3.91, pz); add_child(lamp)
 	var omni := OmniLight3D.new()
 	omni.light_color  = Color(1.0, 0.92, 0.72)
-	omni.light_energy = 1.4
-	omni.omni_range   = 9.0
+	omni.light_energy = omni_energy
+	omni.omni_range   = omni_range
 	omni.position     = Vector3(px+0.92, 3.86, pz)
 	add_child(omni)
 

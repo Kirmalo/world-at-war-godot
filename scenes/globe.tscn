@@ -91,6 +91,33 @@ text = "HARD"
 theme_override_font_sizes/font_size = 18
 theme_override_colors/font_color = Color(1.0, 0.35, 0.35, 1)
 
+[node name="TimeRow" type="HBoxContainer" parent="VBox"]
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="TimeLabel" type="Label" parent="VBox/TimeRow"]
+text = "TIME OF DAY:"
+theme_override_font_sizes/font_size = 20
+theme_override_colors/font_color = Color(0.75, 0.85, 0.75, 1)
+
+[node name="DayBtn" type="Button" parent="VBox/TimeRow"]
+custom_minimum_size = Vector2(100, 44)
+text = "DAY"
+theme_override_font_sizes/font_size = 18
+theme_override_colors/font_color = Color(1.0, 0.92, 0.50, 1)
+
+[node name="DuskBtn" type="Button" parent="VBox/TimeRow"]
+custom_minimum_size = Vector2(100, 44)
+text = "DUSK"
+theme_override_font_sizes/font_size = 18
+theme_override_colors/font_color = Color(1.0, 0.52, 0.18, 1)
+
+[node name="NightBtn" type="Button" parent="VBox/TimeRow"]
+custom_minimum_size = Vector2(100, 44)
+text = "NIGHT"
+theme_override_font_sizes/font_size = 18
+theme_override_colors/font_color = Color(0.38, 0.55, 0.90, 1)
+
 [node name="GenerateBtn" type="Button" parent="VBox"]
 custom_minimum_size = Vector2(0, 64)
 text = "GENERATE BATTLEZONE"

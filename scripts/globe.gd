@@ -55,6 +55,7 @@ func _ready() -> void:
 	_style_generate_btn()
 	_pulse_generate_btn()
 	_setup_difficulty_btns()
+	_setup_time_btns()
 
 func _style_generate_btn() -> void:
 	var norm := StyleBoxFlat.new()
@@ -233,6 +234,25 @@ func _refresh_diff_btns(btns: Array, diffs: Array, active: String) -> void:
 	for i in btns.size():
 		var b := btns[i] as Button
 		b.modulate = Color(1.4, 1.4, 1.4) if diffs[i] == active else Color(0.6, 0.6, 0.6)
+
+func _setup_time_btns() -> void:
+	var times := ["day", "dusk", "night"]
+	var btns  := [$VBox/TimeRow/DayBtn, $VBox/TimeRow/DuskBtn, $VBox/TimeRow/NightBtn]
+	var mn    := _main()
+	for i in times.size():
+		var t: String = times[i]
+		var b: Button = btns[i] as Button
+		b.pressed.connect(func()->void:
+			Sounds.play("click", -8.0)
+			mn.time_of_day = t
+			_refresh_time_btns(btns, times, t)
+		)
+	_refresh_time_btns(btns, times, mn.time_of_day)
+
+func _refresh_time_btns(btns: Array, times: Array, active: String) -> void:
+	for i in btns.size():
+		var b := btns[i] as Button
+		b.modulate = Color(1.4, 1.4, 1.4) if times[i] == active else Color(0.6, 0.6, 0.6)
 
 func _on_generate() -> void:
 	_main().show_generation()
