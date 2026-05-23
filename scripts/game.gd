@@ -396,7 +396,7 @@ func _setup_environment() -> void:
 	sun.shadow_enabled = true
 	# Night uses simpler shadow cascade (moon gives soft, low-contrast shadows)
 	sun.directional_shadow_mode         = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if tod == "night" \
-	                                      else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+										  else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 80.0
 	sun.directional_shadow_fade_start   = 0.92
 	sun.shadow_bias                     = 0.008
@@ -949,7 +949,7 @@ func _build_bld_brick_row(px: float, pz: float, sat_col: Color) -> void:
 	var corn := _box(Vector3(bw + 0.14, 0.11, bd + 0.14), _mat(wall_col.lightened(0.14)))
 	corn.position = Vector3(px, h - 0.10, pz); add_child(corn)
 	var par := _box(Vector3(bw + 0.05, 0.22, bd + 0.05), _mat(roof_col))
-	par.position = Vector3(px, h + 0.11, pz); add_child(par)
+	par.position = Vector3(px, h + 0.17, pz); add_child(par)
 	var chim_w := 0.22 + _rng.randf() * 0.10
 	var chim_h := 0.55 + _rng.randf() * 0.35
 	var chim := _box(Vector3(chim_w, chim_h, chim_w), _mat(wall_col.darkened(0.18)))
@@ -975,7 +975,7 @@ func _build_bld_concrete_block(px: float, pz: float, sat_col: Color) -> void:
 	var corn := _box(Vector3(bw + 0.18, 0.12, bd + 0.18), _mat(wall_col.lightened(0.08)))
 	corn.position = Vector3(px, h - 0.12, pz); add_child(corn)
 	var par := _box(Vector3(bw + 0.06, 0.26, bd + 0.06), _mat(roof_col))
-	par.position = Vector3(px, h + 0.13, pz); add_child(par)
+	par.position = Vector3(px, h + 0.19, pz); add_child(par)
 	var rbox := _box(Vector3(0.38, 0.42, 0.28), _mat(roof_col.darkened(0.15)))
 	rbox.position = Vector3(px + bw*0.22, h + 0.55, pz - bd*0.22); add_child(rbox)
 	var ant := _box(Vector3(0.04, 0.80, 0.04), _mat(Color(0.50, 0.50, 0.52)))
@@ -992,7 +992,7 @@ func _build_bld_glass_tower(px: float, pz: float, sat_col: Color) -> void:
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(body)
 	var cap := _box(Vector3(bw + 0.08, 0.12, bd + 0.08), _mat(roof_col))
-	cap.position = Vector3(px, h + 0.06, pz); add_child(cap)
+	cap.position = Vector3(px, h + 0.12, pz); add_child(cap)
 	var mech := _box(Vector3(bw*0.45, 0.55, bd*0.35), _mat(roof_col.darkened(0.20)))
 	mech.position = Vector3(px, h + 0.38, pz); add_child(mech)
 
@@ -1040,7 +1040,7 @@ func _build_bld_industrial(px: float, pz: float, sat_col: Color) -> void:
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(body)
 	var roof_slab := _box(Vector3(bw + 0.06, 0.14, bd + 0.06), _mat(roof_col))
-	roof_slab.position = Vector3(px, h + 0.07, pz); add_child(roof_slab)
+	roof_slab.position = Vector3(px, h + 0.13, pz); add_child(roof_slab)
 	var skyl_n := 2 + _rng.randi() % 2
 	for si in skyl_n:
 		var fi := (float(si) + 0.5) / float(skyl_n)
@@ -1065,7 +1065,7 @@ func _build_bld_stone_historic(px: float, pz: float, sat_col: Color) -> void:
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(body)
 	var roof_cap := _box(Vector3(bw + 0.08, 0.20, bd + 0.08), _mat(roof_col))
-	roof_cap.position = Vector3(px, h + 0.10, pz); add_child(roof_cap)
+	roof_cap.position = Vector3(px, h + 0.16, pz); add_child(roof_cap)
 	var corn := _box(Vector3(bw + 0.14, 0.12, bd + 0.14), _mat(wall_col.lightened(0.08)))
 	corn.position = Vector3(px, h - 0.18, pz); add_child(corn)
 	if h > 4.5:
@@ -1075,7 +1075,7 @@ func _build_bld_stone_historic(px: float, pz: float, sat_col: Color) -> void:
 		tower.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		add_child(tower)
 		var tcap := _box(Vector3(tw + 0.08, 0.16, tw + 0.08), _mat(roof_col))
-		tcap.position = Vector3(px + bw*0.5 - tw*0.5, h + th + 0.08, pz + bd*0.5 - tw*0.5)
+		tcap.position = Vector3(px + bw*0.5 - tw*0.5, h + th + 0.14, pz + bd*0.5 - tw*0.5)
 		add_child(tcap)
 
 func _sample_sat(wx: float, wz: float) -> Color:
@@ -1395,8 +1395,8 @@ func _vehicle_color_from_sat(sat: Color) -> Color:
 		var mx     := maxf(maxf(sat.r, sat.g), sat.b)
 		var factor := clampf(0.70 / maxf(mx, 0.05), 0.8, 3.5)
 		return Color(clampf(sat.r*factor, 0.08, 0.92),
-		             clampf(sat.g*factor, 0.08, 0.92),
-		             clampf(sat.b*factor, 0.08, 0.92))
+					 clampf(sat.g*factor, 0.08, 0.92),
+					 clampf(sat.b*factor, 0.08, 0.92))
 	# Fallback: common car colours when satellite shows only dark road
 	var palette := [
 		Color(0.88, 0.88, 0.88), Color(0.62, 0.62, 0.64),  # white / silver
