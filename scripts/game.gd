@@ -208,10 +208,11 @@ var _bld_mats:  Dictionary = {}     # bld_type  -> StandardMaterial3D (cached pe
 var _ground_mat: ShaderMaterial = null  # ground base mesh — road_mask uniform set post-tmap
 
 # Effect material / mesh / particle cache — initialised once in _ready(), reused every shot
-var _mat_muzzle:     StandardMaterial3D      = null
-var _mat_tracer:     StandardMaterial3D      = null
-var _mat_expl_flash: StandardMaterial3D      = null
-var _mat_expl_ring:  StandardMaterial3D      = null
+var _mat_muzzle:        StandardMaterial3D      = null
+var _mat_tracer:        StandardMaterial3D      = null
+var _mat_expl_flash:    StandardMaterial3D      = null
+var _mat_expl_ring:     StandardMaterial3D      = null
+var _mat_vehicle_glass: StandardMaterial3D      = null  # shared glass window mat for all vehicles
 var _mesh_muzzle:    SphereMesh              = null
 var _spark_ppm:      ParticleProcessMaterial = null
 var _smoke_ppm:      ParticleProcessMaterial = null
@@ -229,8 +230,18 @@ func _ready() -> void:
 func _do_ready_async() -> void:
 	# Yield between phases so mobile doesn't hard-freeze on a single long frame.
 	# The main.tscn fade overlay is black during this time, so the yields are invisible.
+
+	# Pre-create vehicle glass material BEFORE world build so all vehicles share one
+	# compiled shader variant instead of triggering per-vehicle shader compilation.
+	_mat_vehicle_glass = StandardMaterial3D.new()
+	_mat_vehicle_glass.albedo_color = Color(0.30, 0.44, 0.56, 0.76)
+	_mat_vehicle_glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+
 	_build_world()
 	await get_tree().process_frame
+	# Spawn parked vehicles after the first rendered frame so world geometry appears
+	# immediately without blocking on vehicle node creation in the same frame.
+	_spawn_parked_vehicles()
 	_init_capture_points()
 	await get_tree().process_frame
 	_setup_hud()
@@ -306,7 +317,7 @@ func _build_world() -> void:
 	else:
 		_build_procedural()
 
-	_spawn_parked_vehicles()
+	# _spawn_parked_vehicles() is called from _do_ready_async() after the first frame yield
 	_hq_zone(Vector3(HQ_X, 0.0, HQ_Z),   Color(0.30,1.00,0.43,0.4), "HQ")
 	_hq_zone(Vector3(-HQ_X,0.0,-HQ_Z),   Color(1.00,0.20,0.18,0.4), "ENEMY")
 	_build_road_mask()
@@ -1275,8 +1286,7 @@ func _build_vehicle(px: float, pz: float, rot_y: float, body_col: Color, vtype: 
 	n.position = Vector3(px, 0.0, pz); n.rotation.y = rot_y; add_child(n)
 	var bmat := _mat(body_col)
 	var cmat := _mat(body_col.darkened(0.18))
-	var gmat := _mat_new(Color(0.30, 0.44, 0.56, 0.76))
-	gmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var gmat := _mat_vehicle_glass   # shared material — created once in _do_ready_async()
 	var wmat := _mat(Color(0.08, 0.08, 0.08))
 	# Dimensions: body width / length / height; cab width / length / height / Z offset
 	var bw: float; var bl: float; var bh: float
@@ -1338,11 +1348,11 @@ func _spawn_parked_vehicles() -> void:
 			if tmap[r][c] != TILE_ROAD: continue
 			# Find a cardinal building neighbour
 			var bdr := 0; var bdc := 0
-			for dir: Array in [[0,1],[0,-1],[1,0],[-1,0]]:
-				var nr := r + dir[0]; var nc := c + dir[1]
+			for di: Vector2i in [Vector2i(0,1), Vector2i(0,-1), Vector2i(1,0), Vector2i(-1,0)]:
+				var nr := r + di.x; var nc := c + di.y
 				if nr < 0 or nr >= TG or nc < 0 or nc >= TG: continue
 				if tmap[nr][nc] == TILE_BUILDING:
-					bdr = dir[0]; bdc = dir[1]; break
+					bdr = di.x; bdc = di.y; break
 			if bdr == 0 and bdc == 0: continue   # no adjacent building — skip
 			if _rng.randf() > 0.32: continue      # 32% spawn rate per eligible cell
 			var px  := _tx(c); var pz := _tz(r)
