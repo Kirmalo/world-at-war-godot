@@ -2281,14 +2281,16 @@ func _attach_weapon(skeleton: Skeleton3D, kind: String) -> void:
 	metal.roughness    = 0.55
 	metal.metallic     = 0.45
 
+	# Bone-local space is scaled by body.scale (0.22), so divide world-space
+	# target sizes by 0.22 (~×4.55) to reach the correct visible dimensions.
 	var wpn_len: float
 	match kind:
-		"sniper","e_sniper": wpn_len = 0.38
-		"mg_team","e_mg":    wpn_len = 0.30
-		"medic":             wpn_len = 0.10
-		_:                   wpn_len = 0.22
+		"sniper","e_sniper": wpn_len = 1.75
+		"mg_team","e_mg":    wpn_len = 1.35
+		"medic":             wpn_len = 0.45
+		_:                   wpn_len = 1.00
 
-	var wpn_m := BoxMesh.new(); wpn_m.size = Vector3(0.028, 0.028, wpn_len)
+	var wpn_m := BoxMesh.new(); wpn_m.size = Vector3(0.12, 0.09, wpn_len)
 	var wpn := MeshInstance3D.new(); wpn.mesh = wpn_m
 	wpn.set_surface_override_material(0, metal)
 	wpn.position = Vector3(0.0, 0.0, wpn_len * 0.5)
@@ -2296,20 +2298,20 @@ func _attach_weapon(skeleton: Skeleton3D, kind: String) -> void:
 
 	if kind in ["sniper", "e_sniper"]:
 		var sc_m := CylinderMesh.new()
-		sc_m.top_radius = 0.010; sc_m.bottom_radius = 0.010
-		sc_m.height = 0.15; sc_m.radial_segments = 5
+		sc_m.top_radius = 0.045; sc_m.bottom_radius = 0.045
+		sc_m.height = 0.65; sc_m.radial_segments = 5
 		var sc := MeshInstance3D.new(); sc.mesh = sc_m
 		sc.set_surface_override_material(0, metal)
 		sc.rotation.x = PI / 2.0
-		sc.position   = Vector3(0.0, 0.024, 0.15)
+		sc.position   = Vector3(0.0, 0.11, 0.65)
 		ba.add_child(sc)
 
 	if kind in ["mg_team", "e_mg"]:
-		for side: float in [-0.034, 0.034]:
-			var bp_m := BoxMesh.new(); bp_m.size = Vector3(0.014, 0.10, 0.014)
+		for side: float in [-0.15, 0.15]:
+			var bp_m := BoxMesh.new(); bp_m.size = Vector3(0.065, 0.45, 0.065)
 			var bp := MeshInstance3D.new(); bp.mesh = bp_m
 			bp.set_surface_override_material(0, metal)
-			bp.position  = Vector3(side, -0.055, 0.08)
+			bp.position  = Vector3(side, -0.25, 0.35)
 			bp.rotation.z = side * deg_to_rad(18.0)
 			ba.add_child(bp)
 
