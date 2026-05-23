@@ -708,9 +708,8 @@ func _build_osm_buildings() -> void:
 			"GLASS_TOWER":    mat_alpha = 0.25
 			_:                mat_alpha = 0.5   # CONCRETE_BLOCK, INDUSTRIAL
 
-		var wc  := _bld_wall_color(bld_type, sat_col)
-		var lf  := 1.0 + _rng.randf() * 0.12
-		var wall_col := Color(minf(wc.r * lf, 1.0), minf(wc.g * lf, 1.0), minf(wc.b * lf, 1.0), mat_alpha)
+		var wc  := _jitter_bld_color(_bld_wall_color(bld_type, sat_col))
+		var wall_col := Color(wc.r, wc.g, wc.b, mat_alpha)
 		var rc  := _bld_roof_color(bld_type, sat_col)
 		var roof_col := Color(rc.r, rc.g, rc.b, mat_alpha)
 
@@ -897,6 +896,14 @@ func _bld_wall_color(bld_type: String, sat_col: Color) -> Color:
 		"STONE_HISTORIC": return Color(0.42 + sb*0.10, 0.36 + sb*0.08, 0.24 + sb*0.06)  # dark sandy stone
 		_:                return Color(0.30 + sb*0.10, 0.29 + sb*0.10, 0.28 + sb*0.10)  # neutral dark grey
 
+## Per-building HSV jitter — unique shade per building within its type palette.
+## hue ±8°, saturation ×0.75-1.25, value ×0.80-1.05 biased darker to prevent white-out.
+func _jitter_bld_color(col: Color) -> Color:
+	var hv := fmod(col.h + _rng.randf_range(-0.022, 0.022) + 1.0, 1.0)
+	var sv := clampf(col.s * _rng.randf_range(0.75, 1.25), 0.0, 1.0)
+	var vv := clampf(col.v * _rng.randf_range(0.80, 1.05), 0.02, 0.88)
+	return Color.from_hsv(hv, sv, vv)
+
 func _bld_roof_color(bld_type: String, sat_col: Color) -> Color:
 	var w := _bld_wall_color(bld_type, sat_col)
 	match bld_type:
@@ -906,8 +913,9 @@ func _bld_roof_color(bld_type: String, sat_col: Color) -> Color:
 		_:                return w.darkened(0.32)
 
 func _build_bld_brick_row(px: float, pz: float, sat_col: Color) -> void:
-	var wall_col := _bld_wall_color("BRICK_ROW", sat_col)
-	var roof_col := _bld_roof_color("BRICK_ROW", sat_col)
+	var wall_col := _jitter_bld_color(_bld_wall_color("BRICK_ROW", sat_col))
+	# Roof: dark fixed tone with slight per-building variation in redness
+	var roof_col := Color(_rng.randf_range(0.13, 0.22), _rng.randf_range(0.09, 0.14), 0.10)
 	var h := 2.2 + _rng.randf() * 1.8
 	var bw := TCELL * 0.72; var bd := TCELL * 0.72
 	var body := _bld_box(Vector3(bw, h, bd), wall_col, 1.0)  # 1.0 = brick
@@ -930,8 +938,8 @@ func _build_bld_brick_row(px: float, pz: float, sat_col: Color) -> void:
 		_add_windows(px, pz, h, bw, bd, wall_col.darkened(0.35))
 
 func _build_bld_concrete_block(px: float, pz: float, sat_col: Color) -> void:
-	var wall_col := _bld_wall_color("CONCRETE_BLOCK", sat_col)
-	var roof_col := _bld_roof_color("CONCRETE_BLOCK", sat_col)
+	var wall_col := _jitter_bld_color(_bld_wall_color("CONCRETE_BLOCK", sat_col))
+	var roof_col := wall_col.darkened(0.30)
 	var h := 4.5 + _rng.randf() * 4.5
 	var bw := TCELL * 0.72; var bd := TCELL * 0.72
 	var body := _bld_box(Vector3(bw, h, bd), wall_col, 0.25)  # 0.25 = concrete
@@ -953,8 +961,8 @@ func _build_bld_concrete_block(px: float, pz: float, sat_col: Color) -> void:
 	_add_windows(px, pz, h, bw, bd, wall_col.darkened(0.30))
 
 func _build_bld_glass_tower(px: float, pz: float, sat_col: Color) -> void:
-	var wall_col := _bld_wall_color("GLASS_TOWER", sat_col)
-	var roof_col := _bld_roof_color("GLASS_TOWER", sat_col)
+	var wall_col := _jitter_bld_color(_bld_wall_color("GLASS_TOWER", sat_col))
+	var roof_col := wall_col.darkened(0.35)
 	var h := 6.0 + _rng.randf() * 6.0
 	var bw := TCELL * 0.64; var bd := TCELL * 0.64
 	var body := _bld_box(Vector3(bw, h, bd), wall_col, 0.5)  # 0.5 = glass
@@ -967,8 +975,16 @@ func _build_bld_glass_tower(px: float, pz: float, sat_col: Color) -> void:
 	mech.position = Vector3(px, h + 0.38, pz); add_child(mech)
 
 func _build_bld_suburban_house(px: float, pz: float, sat_col: Color) -> void:
-	var wall_col := _bld_wall_color("SUBURBAN_HOUSE", sat_col)
-	var roof_col := _bld_roof_color("SUBURBAN_HOUSE", sat_col)
+	var wall_col := _jitter_bld_color(_bld_wall_color("SUBURBAN_HOUSE", sat_col))
+	# Roofs vary between dark terracotta, slate, and charcoal
+	var roof_roll := _rng.randf()
+	var roof_col: Color
+	if roof_roll < 0.40:
+		roof_col = Color(_rng.randf_range(0.30, 0.42), 0.14, 0.10)  # terracotta
+	elif roof_roll < 0.70:
+		roof_col = Color(0.18, 0.18, 0.20)                           # slate grey
+	else:
+		roof_col = Color(0.13, 0.11, 0.10)                           # near-black tar
 	var h := 1.9 + _rng.randf() * 1.2
 	var bw := TCELL * 0.70; var bd := TCELL * 0.70
 	var body := _bld_box(Vector3(bw, h, bd), wall_col, 0.75)  # 0.75 = wood
@@ -990,8 +1006,8 @@ func _build_bld_suburban_house(px: float, pz: float, sat_col: Color) -> void:
 	porch.position = Vector3(px, h - 0.04, pz + bd*0.5 + 0.27); add_child(porch)
 
 func _build_bld_industrial(px: float, pz: float, sat_col: Color) -> void:
-	var wall_col := _bld_wall_color("INDUSTRIAL", sat_col)
-	var roof_col := _bld_roof_color("INDUSTRIAL", sat_col)
+	var wall_col := _jitter_bld_color(_bld_wall_color("INDUSTRIAL", sat_col))
+	var roof_col := Color(wall_col.r * 0.78, wall_col.g * 0.78, wall_col.b * 0.82)
 	var h := 1.8 + _rng.randf() * 1.4
 	var bw := TCELL * 0.76; var bd := TCELL * 0.76
 	var body := _bld_box(Vector3(bw, h, bd), wall_col, 0.25)  # 0.25 = concrete/metal
@@ -1015,8 +1031,8 @@ func _build_bld_industrial(px: float, pz: float, sat_col: Color) -> void:
 	dock.position = Vector3(px - bw*0.20, h * 0.27, pz - bd*0.5 - 0.15); add_child(dock)
 
 func _build_bld_stone_historic(px: float, pz: float, sat_col: Color) -> void:
-	var wall_col := _bld_wall_color("STONE_HISTORIC", sat_col)
-	var roof_col := _bld_roof_color("STONE_HISTORIC", sat_col)
+	var wall_col := _jitter_bld_color(_bld_wall_color("STONE_HISTORIC", sat_col))
+	var roof_col := wall_col.darkened(0.28)
 	var h := 3.2 + _rng.randf() * 2.0
 	var bw := TCELL * 0.68; var bd := TCELL * 0.68
 	var body := _bld_box(Vector3(bw, h, bd), wall_col, 1.0)  # 1.0 = brick (closest to stone)
