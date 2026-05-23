@@ -318,6 +318,7 @@ func _build_world() -> void:
 		_build_procedural()
 
 	# _spawn_parked_vehicles() is called from _do_ready_async() after the first frame yield
+	_scatter_ground_detail()
 	_hq_zone(Vector3(HQ_X, 0.0, HQ_Z),   Color(0.30,1.00,0.43,0.4), "HQ")
 	_hq_zone(Vector3(-HQ_X,0.0,-HQ_Z),   Color(1.00,0.20,0.18,0.4), "ENEMY")
 	_build_road_mask()
@@ -896,6 +897,21 @@ func _bld_wall_color(bld_type: String, sat_col: Color) -> Color:
 		"STONE_HISTORIC": return Color(0.42 + sb*0.10, 0.36 + sb*0.08, 0.24 + sb*0.06)  # dark sandy stone
 		_:                return Color(0.30 + sb*0.10, 0.29 + sb*0.10, 0.28 + sb*0.10)  # neutral dark grey
 
+## Diverse wall-colour palette for suburban houses.
+## Picks one of seven real paint categories, then satellite brightness adds
+## subtle per-block variation within that category.
+func _suburban_wall_color(sat_col: Color) -> Color:
+	var sb := clampf((sat_col.r + sat_col.g + sat_col.b) / 3.0 * 1.5, 0.0, 0.38)
+	var idx := _rng.randi() % 7
+	match idx:
+		0: return Color(0.82 + sb*0.04, 0.80 + sb*0.03, 0.75 + sb*0.03)  # off-white
+		1: return Color(0.72 + sb*0.05, 0.68 + sb*0.05, 0.52 + sb*0.04)  # warm cream
+		2: return Color(0.54 + sb*0.06, 0.42 + sb*0.05, 0.28 + sb*0.04)  # warm tan
+		3: return Color(0.70 + sb*0.05, 0.66 + sb*0.04, 0.44 + sb*0.04)  # pale yellow
+		4: return Color(0.58 + sb*0.05, 0.57 + sb*0.05, 0.56 + sb*0.05)  # light grey
+		5: return Color(0.50 + sb*0.05, 0.54 + sb*0.05, 0.58 + sb*0.06)  # blue-grey slate
+		_: return Color(0.44 + sb*0.05, 0.51 + sb*0.05, 0.38 + sb*0.05)  # sage green
+
 ## Per-building HSV jitter — unique shade per building within its type palette.
 ## hue ±8°, saturation ×0.85-1.15, value ×0.90-1.08.
 ## Narrow value range: base colours are already dark; even ×0.80 pushes
@@ -977,8 +993,11 @@ func _build_bld_glass_tower(px: float, pz: float, sat_col: Color) -> void:
 	mech.position = Vector3(px, h + 0.38, pz); add_child(mech)
 
 func _build_bld_suburban_house(px: float, pz: float, sat_col: Color) -> void:
-	var wall_col := _jitter_bld_color(_bld_wall_color("SUBURBAN_HOUSE", sat_col))
-	# Roofs vary between dark terracotta, slate, and charcoal
+	# Palette picker gives 7 distinct colour families; small value nudge varies each instance.
+	var base := _suburban_wall_color(sat_col)
+	var wall_col := Color.from_hsv(base.h, base.s,
+			clampf(base.v * _rng.randf_range(0.90, 1.06), 0.18, 0.88))
+	# Roofs vary between terracotta, slate, and near-black tar
 	var roof_roll := _rng.randf()
 	var roof_col: Color
 	if roof_roll < 0.40:
@@ -1463,6 +1482,59 @@ func _scatter_terrain_trees() -> void:
 			if _rng.randf() < 0.18:
 				_place_tree(_tx(c), _tz(r))
 				tmap[r][c] = TILE_TREE
+
+## Lay grass / yard pads on TILE_GROUND cells that adjoin buildings or roads.
+## Single batched ArrayMesh → one draw call. Sits at y=0.018, above the
+## satellite overlay (0.01) and below road asphalt (0.025).
+func _scatter_ground_detail() -> void:
+	var all_v   := PackedVector3Array()
+	var all_n   := PackedVector3Array()
+	var all_c   := PackedColorArray()
+	var all_idx := PackedInt32Array()
+	const Y    := 0.018
+	var hw     := TCELL * 0.5 - 0.05   # slight inset so edges don't z-fight roads
+	for r in TG:
+		for c in TG:
+			if tmap[r][c] != TILE_GROUND: continue
+			var bld_n := 0; var road_n := 0
+			for di: Vector2i in [Vector2i(0,1), Vector2i(0,-1), Vector2i(1,0), Vector2i(-1,0)]:
+				var nr := r + di.x; var nc := c + di.y
+				if nr < 0 or nr >= TG or nc < 0 or nc >= TG: continue
+				if tmap[nr][nc] == TILE_BUILDING: bld_n += 1
+				if tmap[nr][nc] == TILE_ROAD:     road_n += 1
+			if bld_n == 0 and road_n == 0: continue   # open field — satellite handles it
+			var px := _tx(c); var pz := _tz(r)
+			var col: Color
+			if bld_n > 0:
+				# Yard / front garden — green with per-cell variation
+				col = Color(
+					0.14 + _rng.randf() * 0.08,
+					0.26 + _rng.randf() * 0.10,
+					0.09 + _rng.randf() * 0.04)
+			else:
+				# Road-side verge — muted grey-green kerb strip
+				col = Color(0.20, 0.24, 0.16)
+			var b := all_v.size()
+			all_v.append_array([
+				Vector3(px - hw, Y, pz - hw), Vector3(px + hw, Y, pz - hw),
+				Vector3(px - hw, Y, pz + hw), Vector3(px + hw, Y, pz + hw)])
+			all_n.append_array([Vector3.UP, Vector3.UP, Vector3.UP, Vector3.UP])
+			all_c.append_array([col, col, col, col])
+			all_idx.append_array([b, b+2, b+1,  b+1, b+2, b+3])
+	if all_v.is_empty(): return
+	var arrays: Array = []; arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = all_v
+	arrays[Mesh.ARRAY_NORMAL] = all_n
+	arrays[Mesh.ARRAY_COLOR]  = all_c
+	arrays[Mesh.ARRAY_INDEX]  = all_idx
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mi := MeshInstance3D.new(); mi.mesh = am
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.90; mat.metallic = 0.0; mat.specular = 0.08
+	mi.set_surface_override_material(0, mat)
+	add_child(mi)
 
 func _block_rubble(blk: Array) -> void:
 	var bw: int = int(blk[3]) - int(blk[1]) + 1
