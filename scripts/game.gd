@@ -306,6 +306,7 @@ func _build_world() -> void:
 	else:
 		_build_procedural()
 
+	_spawn_parked_vehicles()
 	_hq_zone(Vector3(HQ_X, 0.0, HQ_Z),   Color(0.30,1.00,0.43,0.4), "HQ")
 	_hq_zone(Vector3(-HQ_X,0.0,-HQ_Z),   Color(1.00,0.20,0.18,0.4), "ENEMY")
 	_build_road_mask()
@@ -359,7 +360,7 @@ func _setup_environment() -> void:
 			glow_int      = 0.70;                    glow_thresh  = 0.72;   glow_scale = 2.8
 		_:  # "day"
 			# Warm afternoon sun, cool sky fill
-			sun_color     = Color(1.00, 0.93, 0.78); sun_energy   = 2.40
+			sun_color     = Color(1.00, 0.93, 0.78); sun_energy   = 1.80
 			sun_rot       = Vector3(-50.0, -32.0, 0.0)
 			fill_color    = Color(0.38, 0.54, 0.84); fill_energy  = 0.30
 			sky_top       = Color(0.10, 0.20, 0.50); sky_horizon  = Color(0.60, 0.68, 0.80)
@@ -368,7 +369,7 @@ func _setup_environment() -> void:
 			fog_col       = Color(0.56, 0.60, 0.64); fog_density  = 0.002
 			vfog_albedo   = Color(0.84, 0.82, 0.80); vfog_emit    = Color(0.28, 0.26, 0.22) * 0.03
 			exposure      = 1.05;                    tone_white   = 5.5
-			saturation    = 0.82;                    ambient_e    = 0.50
+			saturation    = 0.82;                    ambient_e    = 0.58
 			contrast      = 1.08;                    ssao_int     = 2.0
 			glow_int      = 0.55;                    glow_thresh  = 0.80;   glow_scale = 2.4
 
@@ -780,10 +781,7 @@ func _build_procedural() -> void:
 	for slx: float in [_tx(7), _tx(12)]:
 		for slz: float in [_tz(3), _tz(6), _tz(11), _tz(14)]:
 			_place_street_light(slx, slz)
-	# Parked cars on both sides of the vertical road corridors
-	for cz: float in [_tz(1), _tz(3), _tz(8), _tz(10), _tz(15), _tz(17)]:
-		_place_car(_tx(5)-0.62, cz, 0.0)
-		_place_car(_tx(14)+0.62, cz, 0.0)
+	# Vehicle placement handled by _spawn_parked_vehicles() after world build
 
 # ── TILE PLACERS ──────────────────────────────────────────────
 
@@ -869,15 +867,17 @@ func _classify_building(sat_col: Color, osm_type: String) -> String:
 	return "CONCRETE_BLOCK"
 
 func _bld_wall_color(bld_type: String, sat_col: Color) -> Color:
-	var sb := clampf((sat_col.r + sat_col.g + sat_col.b) / 3.0 * 2.5, 0.1, 0.9)
+	# sat brightness drives subtle per-block variation; kept in a narrow range
+	# so the base hue always reads clearly even under direct sun
+	var sb := clampf((sat_col.r + sat_col.g + sat_col.b) / 3.0 * 2.0, 0.05, 0.70)
 	match bld_type:
-		"BRICK_ROW":      return Color(0.52 + sb*0.15, 0.24 + sb*0.08, 0.14 + sb*0.05)
-		"CONCRETE_BLOCK": return Color(0.52 + sb*0.12, 0.51 + sb*0.12, 0.50 + sb*0.12)
-		"GLASS_TOWER":    return Color(0.36 + sb*0.14, 0.44 + sb*0.12, 0.54 + sb*0.16)
-		"SUBURBAN_HOUSE": return Color(0.68 + sb*0.14, 0.62 + sb*0.11, 0.50 + sb*0.10)
-		"INDUSTRIAL":     return Color(0.38 + sb*0.10, 0.37 + sb*0.10, 0.35 + sb*0.10)
-		"STONE_HISTORIC": return Color(0.56 + sb*0.12, 0.52 + sb*0.10, 0.38 + sb*0.08)
-		_:                return Color(0.55 + sb*0.12, 0.52 + sb*0.11, 0.50 + sb*0.11)
+		"BRICK_ROW":      return Color(0.58 + sb*0.10, 0.22 + sb*0.06, 0.12 + sb*0.04)  # warm terracotta
+		"CONCRETE_BLOCK": return Color(0.36 + sb*0.10, 0.37 + sb*0.10, 0.42 + sb*0.10)  # cool grey-blue
+		"GLASS_TOWER":    return Color(0.22 + sb*0.08, 0.34 + sb*0.12, 0.54 + sb*0.14)  # steel blue
+		"SUBURBAN_HOUSE": return Color(0.68 + sb*0.10, 0.56 + sb*0.08, 0.40 + sb*0.07)  # warm cream
+		"INDUSTRIAL":     return Color(0.26 + sb*0.08, 0.25 + sb*0.08, 0.24 + sb*0.07)  # dark iron grey
+		"STONE_HISTORIC": return Color(0.50 + sb*0.10, 0.44 + sb*0.08, 0.30 + sb*0.06)  # sandy stone
+		_:                return Color(0.40 + sb*0.10, 0.39 + sb*0.10, 0.38 + sb*0.10)
 
 func _bld_roof_color(bld_type: String, sat_col: Color) -> Color:
 	var w := _bld_wall_color(bld_type, sat_col)
@@ -1262,28 +1262,99 @@ func _place_street_light(px: float, pz: float) -> void:
 	add_child(omni)
 
 func _place_car(px: float, pz: float, rot_y: float) -> void:
+	# Legacy wrapper — delegates to the typed vehicle builder with random params
+	var body_col := Color(_rng.randf_range(0.15, 0.80), _rng.randf_range(0.10, 0.75), _rng.randf_range(0.10, 0.75))
+	var vroll := _rng.randf()
+	_build_vehicle(px, pz, rot_y, body_col, 2 if vroll > 0.85 else (1 if vroll > 0.60 else 0))
+
+# ── Vehicle builder ───────────────────────────────────────────────────────────
+# vtype: 0=sedan  1=SUV  2=van/truck
+# All geometry at real-world scale: 0.2 game units per metre.
+func _build_vehicle(px: float, pz: float, rot_y: float, body_col: Color, vtype: int = 0) -> void:
 	var n := Node3D.new()
 	n.position = Vector3(px, 0.0, pz); n.rotation.y = rot_y; add_child(n)
-	var body_col := Color(_rng.randf_range(0.15,0.75), _rng.randf_range(0.10,0.70), _rng.randf_range(0.10,0.70))
-	var body := _box(Vector3(0.80, 0.36, 1.60), _mat(body_col))
-	body.position = Vector3(0.0, 0.31, 0.0); n.add_child(body)
-	var cab := _box(Vector3(0.72, 0.26, 0.82), _mat(Color(0.20, 0.22, 0.20)))
-	cab.position = Vector3(0.0, 0.55, -0.08); n.add_child(cab)
-	var win_mat := _mat_new(Color(0.32, 0.46, 0.58, 0.78))
-	win_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	for wx: float in [-0.37, 0.37]:
-		var win := _box(Vector3(0.04, 0.17, 0.54), win_mat)
-		win.position = Vector3(wx, 0.54, -0.07); n.add_child(win)
-	var wmat := _mat(Color(0.10, 0.10, 0.10))
-	for wz: float in [-0.54, 0.54]:
-		for wx: float in [-0.42, 0.42]:
+	var bmat := _mat(body_col)
+	var cmat := _mat(body_col.darkened(0.18))
+	var gmat := _mat_new(Color(0.30, 0.44, 0.56, 0.76))
+	gmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var wmat := _mat(Color(0.08, 0.08, 0.08))
+	# Dimensions: body width / length / height; cab width / length / height / Z offset
+	var bw: float; var bl: float; var bh: float
+	var cw: float; var cl: float; var ch: float; var cz: float
+	var wl: float; var ww: float  # wheel half-offsets longitudinal / lateral
+	match vtype:
+		1:  # SUV — boxier, taller
+			bw=0.38; bl=0.96; bh=0.30;  cw=0.34; cl=0.62; ch=0.24; cz=0.0
+			wl=0.36; ww=0.20
+		2:  # Van / pickup truck
+			bw=0.40; bl=1.20; bh=0.36;  cw=0.36; cl=0.42; ch=0.26; cz=-0.36
+			wl=0.48; ww=0.21
+		_:  # 0 = sedan
+			bw=0.36; bl=0.88; bh=0.24;  cw=0.30; cl=0.48; ch=0.20; cz=-0.04
+			wl=0.30; ww=0.19
+	var body := _box(Vector3(bw, bh, bl), bmat)
+	body.position = Vector3(0, bh*0.5 + 0.04, 0); n.add_child(body)
+	var cab := _box(Vector3(cw, ch, cl), cmat)
+	cab.position = Vector3(0, bh + ch*0.5 + 0.04, cz); n.add_child(cab)
+	for wx_s: float in [-bw*0.5 - 0.01, bw*0.5 + 0.01]:
+		var win := _box(Vector3(0.025, ch*0.70, cl*0.76), gmat)
+		win.position = Vector3(wx_s, bh + ch*0.5 + 0.04, cz); n.add_child(win)
+	for wz_s: float in [-wl, wl]:
+		for wx_s: float in [-ww, ww]:
 			var wm := CylinderMesh.new()
-			wm.top_radius = 0.13; wm.bottom_radius = 0.13
-			wm.height = 0.12; wm.radial_segments = 8
+			wm.top_radius = 0.09; wm.bottom_radius = 0.09
+			wm.height = 0.07; wm.radial_segments = 7
 			var wheel := MeshInstance3D.new(); wheel.mesh = wm
 			wheel.set_surface_override_material(0, wmat)
-			wheel.rotation.z = PI/2.0
-			wheel.position = Vector3(wx, 0.13, wz); n.add_child(wheel)
+			wheel.rotation.z = PI / 2.0
+			wheel.position = Vector3(wx_s, 0.09, wz_s); n.add_child(wheel)
+
+# Pick vehicle paint from satellite pixel.
+# If the pixel is lighter / more chromatic than bare road it's probably a vehicle top.
+func _vehicle_color_from_sat(sat: Color) -> Color:
+	var bright  := (sat.r + sat.g + sat.b) / 3.0
+	var chroma  := maxf(maxf(sat.r, sat.g), sat.b) - minf(minf(sat.r, sat.g), sat.b)
+	if bright > 0.22 or chroma > 0.09:
+		# Amplify to a plausible car paint colour (satellite top-view is dim)
+		var mx     := maxf(maxf(sat.r, sat.g), sat.b)
+		var factor := clampf(0.70 / maxf(mx, 0.05), 0.8, 3.5)
+		return Color(clampf(sat.r*factor, 0.08, 0.92),
+		             clampf(sat.g*factor, 0.08, 0.92),
+		             clampf(sat.b*factor, 0.08, 0.92))
+	# Fallback: common car colours when satellite shows only dark road
+	var palette := [
+		Color(0.88, 0.88, 0.88), Color(0.62, 0.62, 0.64),  # white / silver
+		Color(0.10, 0.10, 0.10), Color(0.60, 0.10, 0.06),  # black / red
+		Color(0.10, 0.18, 0.52), Color(0.24, 0.38, 0.16),  # blue  / green
+		Color(0.48, 0.38, 0.20),                            # beige
+	]
+	return palette[_rng.randi() % palette.size()]
+
+# Scan the populated tmap and park vehicles on road cells adjacent to buildings.
+# Works for both OSM and procedural maps — called after full world build.
+func _spawn_parked_vehicles() -> void:
+	for r in TG:
+		for c in TG:
+			if tmap[r][c] != TILE_ROAD: continue
+			# Find a cardinal building neighbour
+			var bdr := 0; var bdc := 0
+			for dir: Array in [[0,1],[0,-1],[1,0],[-1,0]]:
+				var nr := r + dir[0]; var nc := c + dir[1]
+				if nr < 0 or nr >= TG or nc < 0 or nc >= TG: continue
+				if tmap[nr][nc] == TILE_BUILDING:
+					bdr = dir[0]; bdc = dir[1]; break
+			if bdr == 0 and bdc == 0: continue   # no adjacent building — skip
+			if _rng.randf() > 0.32: continue      # 32% spawn rate per eligible cell
+			var px  := _tx(c); var pz := _tz(r)
+			# Offset toward building side so vehicle sits at the kerb
+			var ox  := float(bdc) * (TCELL * 0.38)
+			var oz  := float(bdr) * (TCELL * 0.38)
+			# Align rotation with road direction (perpendicular to building normal)
+			var rot := 0.0 if bdr != 0 else PI * 0.5
+			var sat := _sample_sat(px + ox, pz + oz)
+			var col := _vehicle_color_from_sat(sat)
+			var vroll := _rng.randf()
+			_build_vehicle(px+ox, pz+oz, rot, col, 2 if vroll>0.85 else (1 if vroll>0.60 else 0))
 
 func _block_buildings(blk: Array) -> void:
 	var bw: int = int(blk[3]) - int(blk[1]) + 1
@@ -1782,7 +1853,7 @@ func _build_unit_mesh(u: Unit, kind: String, team: String) -> void:
 
 	# ── KayKit Mannequin_Medium body ─────────────────────────────
 	var body := _CHAR_MAN.instantiate() as Node3D
-	body.scale = Vector3(0.28, 0.28, 0.28)
+	body.scale = Vector3(0.22, 0.22, 0.22)
 	body.name = "Body"
 	u.add_child(body)
 
