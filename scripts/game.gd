@@ -150,6 +150,10 @@ var _bunker_tiles:  Dictionary = {}  # Vector2i -> true, for CP bunker positions
 var _mortar_mode: bool   = false
 var _mortar_btn:  Button = null
 
+# Speed control
+var _game_speed: float = 1.0   # 1.0 or 2.0; drives Engine.time_scale
+var _speed_btn:  Button = null
+
 # Retreat / HUD extras
 var _retreat_btn:     Button           = null
 var _vet_star_nodes:  Dictionary       = {}    # Unit -> Node3D star indicator
@@ -4174,6 +4178,9 @@ func _save_score(victory: bool) -> void:
 func _show_endgame(victory: bool) -> void:
 	if not game_active: return
 	game_active = false
+	Engine.time_scale = 1.0   # always return to normal speed at end
+	_game_speed = 1.0
+	_refresh_speed_btn()
 	_save_score(victory)
 	Sounds.play("victory" if victory else "defeat", 0.0)
 
@@ -4274,6 +4281,16 @@ func _setup_hud() -> void:
 	ucl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	$HUD/TopBar.add_child(ucl)
 	_unit_count_lbl = ucl
+	# Speed toggle button — cycles 1× ↔ 2×
+	var spb := Button.new()
+	spb.name = "SpeedBtn"
+	spb.text = "▶ 1×"
+	spb.add_theme_font_size_override("font_size", 16)
+	spb.add_theme_color_override("font_color", Color(0.60, 0.85, 0.60))
+	spb.focus_mode = Control.FOCUS_NONE
+	spb.pressed.connect(func()->void: _toggle_speed())
+	$HUD/TopBar.add_child(spb)
+	_speed_btn = spb
 	var play_again_btn := $HUD/EndgamePanel/VBox/PlayAgainBtn as Button
 	if play_again_btn:
 		play_again_btn.pressed.connect(func()->void: Sounds.play("click"); _main().show_generation())
@@ -4885,8 +4902,27 @@ func _pmenu_style(bg: Color, border: Color) -> StyleBoxFlat:
 
 # ── Pause show / hide ─────────────────────────────────────────
 
+func _toggle_speed() -> void:
+	Sounds.play("click", -8.0)
+	_game_speed = 2.0 if _game_speed < 1.5 else 1.0
+	Engine.time_scale = _game_speed
+	_refresh_speed_btn()
+
+func _refresh_speed_btn() -> void:
+	if _speed_btn == null: return
+	if _game_speed >= 1.5:
+		_speed_btn.text = "⏩ 2×"
+		_speed_btn.add_theme_color_override("font_color", Color(1.0, 0.75, 0.20))
+	else:
+		_speed_btn.text = "▶ 1×"
+		_speed_btn.add_theme_color_override("font_color", Color(0.60, 0.85, 0.60))
+
+func _exit_tree() -> void:
+	Engine.time_scale = 1.0   # always restore on scene change
+
 func _show_pause() -> void:
 	if _pause_layer == null: return
+	Engine.time_scale = 1.0   # freeze animations while paused
 	game_paused = true
 	_pause_layer.visible   = true
 	_pause_panel.modulate.a   = 0.0
@@ -4907,6 +4943,7 @@ func _hide_pause() -> void:
 	await tw.finished
 	_pause_layer.visible = false
 	game_paused = false
+	Engine.time_scale = _game_speed  # restore player's chosen speed
 
 func _open_settings() -> void:
 	_settings_panel.visible   = true
