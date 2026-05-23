@@ -29,6 +29,8 @@ var campaign_mode:      bool = false
 var campaign_city_idx:  int  = -1
 ## Wave cap for current campaign mission (0 = use all WAVE_DEFS waves).
 var campaign_wave_cap:  int  = 0
+## Endless mode: no victory condition, escalating waves until HQ falls.
+var endless_mode:       bool = false
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -52,6 +54,7 @@ func show_campaign_world() -> void:
 ## If no campaign is in progress, opens city-selection inline on the globe.
 ## Otherwise resumes at the current prologue mission's pre-brief.
 func show_campaign_start() -> void:
+	endless_mode = false   # campaign and endless are mutually exclusive
 	# If prologue already done, go straight to world theater.
 	if Campaign.prologue_done:
 		show_campaign_world()

@@ -57,6 +57,7 @@ func _ready() -> void:
 	_pulse_generate_btn()
 	_setup_difficulty_btns()
 	_setup_time_btns()
+	_setup_endless_btn()
 	_setup_campaign_btn()
 	# If we arrived here because main.gd wants a campaign city selection,
 	# update the UI to show a campaign-confirm button instead of Generate.
@@ -259,6 +260,42 @@ func _refresh_time_btns(btns: Array, times: Array, active: String) -> void:
 	for i in btns.size():
 		var b := btns[i] as Button
 		b.modulate = Color(1.4, 1.4, 1.4) if times[i] == active else Color(0.6, 0.6, 0.6)
+
+func _setup_endless_btn() -> void:
+	var mn := _main()
+	var row := HBoxContainer.new()
+	row.name = "EndlessRow"
+	row.add_theme_constant_override("separation", 12)
+
+	var lbl := Label.new()
+	lbl.text = "MODE:"
+	lbl.add_theme_font_size_override("font_size", 17)
+	lbl.add_theme_color_override("font_color", Color(0.55, 0.75, 0.55))
+	lbl.custom_minimum_size = Vector2(100, 0)
+	lbl.vertical_alignment  = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(lbl)
+
+	var btn := Button.new()
+	btn.name = "EndlessBtn"
+	btn.text = "∞  ENDLESS"
+	btn.add_theme_font_size_override("font_size", 17)
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.pressed.connect(func()->void:
+		Sounds.play("click", -8.0)
+		mn.endless_mode = not bool(mn.get("endless_mode"))
+		_refresh_endless_btn(btn, bool(mn.get("endless_mode")))
+	)
+	row.add_child(btn)
+
+	# Insert into VBox directly before GenerateBtn
+	var vbox := $VBox as VBoxContainer
+	vbox.add_child(row)
+	vbox.move_child(row, generate_btn.get_index())
+
+	_refresh_endless_btn(btn, bool(mn.get("endless_mode")))
+
+func _refresh_endless_btn(btn: Button, active: bool) -> void:
+	btn.modulate = Color(1.8, 1.2, 0.4) if active else Color(0.6, 0.6, 0.6)
 
 func _on_generate() -> void:
 	if _campaign_city_select:

@@ -89,6 +89,7 @@ var supplies: int      = 300
 var wave_num: int      = 0
 var wave_timer: float  = 50.0
 var _wave_cap: int     = 0    # 0 = full WAVE_DEFS; set from main.campaign_wave_cap
+var _endless_mode: bool = false  # set from main.endless_mode
 var game_active: bool  = false
 var kill_count: int    = 0
 var supply_accum: float = 0.0
@@ -260,6 +261,9 @@ func _do_ready_async() -> void:
 	# Apply campaign wave cap (0 = no cap / use full WAVE_DEFS)
 	var _cap_raw = _main().get("campaign_wave_cap")
 	_wave_cap = int(_cap_raw) if _cap_raw != null else 0
+	# Endless mode: escalating waves, no victory condition
+	var _em_raw = _main().get("endless_mode")
+	_endless_mode = bool(_em_raw) if _em_raw != null else false
 	game_active = true
 	_set_status("DEFEND THE NEIGHBORHOOD  |  TAP TO SELECT AND COMMAND")
 	if not FileAccess.file_exists("user://tutorial_done"):
@@ -2347,7 +2351,9 @@ func _update_wave(delta: float) -> void:
 	wave_timer -= delta
 	var eff_waves := _effective_wave_count()
 	# Clear bonus: cap wait to 10s once the field is clear
-	if wave_num > 0 and wave_num < eff_waves and wave_timer > 10.0:
+	# In endless mode this applies every wave; in normal mode only while waves remain.
+	var more_waves := _endless_mode or wave_num < eff_waves
+	if wave_num > 0 and more_waves and wave_timer > 10.0:
 		var has_enemies := false
 		for u in units:
 			var ue := u as Unit
@@ -2358,13 +2364,14 @@ func _update_wave(delta: float) -> void:
 			if _wave_clear_notified < wave_num:
 				_wave_clear_notified = wave_num
 				_flash_wave_clear(wave_num)
-	if wave_timer <= 0.0 and wave_num < eff_waves:
+	if wave_timer <= 0.0 and more_waves:
 		_launch_wave()
 		match (_main().get("difficulty") as String):
 			"easy": wave_timer = 60.0
 			"hard": wave_timer = 40.0
 			_:      wave_timer = 50.0
-	elif wave_num >= eff_waves:
+	elif not _endless_mode and wave_num >= eff_waves:
+		# Normal/campaign: victory when last wave is cleared
 		var enemies_left := units.filter(func(u): return (u as Unit) != null and (u as Unit).team == "enemy" and (u as Unit).hp > 0)
 		if enemies_left.is_empty():
 			_show_endgame(true)
@@ -2382,34 +2389,58 @@ func _find_road_near(wx: float, wz: float, max_r: int = 5) -> Vector3:
 					return Vector3(_tx(c), 0.0, _tz(r))
 	return Vector3(wx, 0.0, wz)
 
+func _gen_endless_wave(w: int) -> Array:
+	# Generates an escalating wave for wave index w (0-based) beyond WAVE_DEFS.
+	# overflow=0 → 5 units / 30% elite; each overflow adds 2 units and +7% elites.
+	var overflow := w - WAVE_DEFS.size()
+	var count    := 5 + overflow * 2
+	var elite    := minf(0.80, 0.30 + overflow * 0.07)
+	var kinds    := ["e_mg", "e_gren", "e_sniper"]
+	var result: Array = []
+	for _i in count:
+		result.append(kinds[_rng.randi() % kinds.size()] if _rng.randf() < elite else "soldier")
+	return result
+
 func _launch_wave() -> void:
-	var base_kinds: Array = WAVE_DEFS[wave_num].duplicate()
+	var w := wave_num  # capture before increment for generation + scaling
+	var base_kinds: Array
+	if _endless_mode and w >= WAVE_DEFS.size():
+		base_kinds = _gen_endless_wave(w)
+	else:
+		base_kinds = WAVE_DEFS[w].duplicate()
 	wave_num += 1
-	# Wave variance: randomly add or remove one soldier
+	# Wave variance: randomly add or remove one soldier (skip for generated endless waves)
 	var diff := _main().get("difficulty") as String
-	var variance: int = _rng.randi_range(-1, 1)
-	if diff == "easy":   variance -= 1
-	elif diff == "hard": variance += 1
-	if variance > 0:
-		base_kinds.append("soldier")
-	elif variance < 0 and base_kinds.size() > 2:
-		base_kinds.remove_at(_rng.randi() % base_kinds.size())
+	if not (_endless_mode and w >= WAVE_DEFS.size()):
+		var variance: int = _rng.randi_range(-1, 1)
+		if diff == "easy":   variance -= 1
+		elif diff == "hard": variance += 1
+		if variance > 0:
+			base_kinds.append("soldier")
+		elif variance < 0 and base_kinds.size() > 2:
+			base_kinds.remove_at(_rng.randi() % base_kinds.size())
 	Sounds.play("wave_alarm", 0.0)
 	_set_status("ENEMY ADVANCE — WAVE %d INCOMING!" % wave_num, STATUS_CRITICAL)
 	_flash_wave_banner(wave_num)
 	# Later waves attack from more edges: wave 1-2 = 1, 3-4 = 2, 5+ = 4
 	var edge_count: int = mini(1 + (wave_num - 1) / 2, 4)
+	# Endless: +10% HP per overflow wave beyond the 5 base waves
+	var endless_scale := 1.0
+	if _endless_mode and w >= WAVE_DEFS.size():
+		endless_scale = 1.0 + float(w - WAVE_DEFS.size()) * 0.10
 	for i in base_kinds.size():
 		var edge_idx: int = i % edge_count
 		var sp := _wave_spawn_pos(edge_idx)
 		var u := spawn_unit(str(base_kinds[i]), "enemy", sp.x, sp.z)
 		if u != null:
 			u.spawn_edge = edge_idx
-			# Difficulty HP scaling
-			if diff == "easy":
-				u.hp = int(float(u.hp) * 0.75); u.hp_max = u.hp
-			elif diff == "hard":
-				u.hp = int(float(u.hp) * 1.25); u.hp_max = u.hp
+			# Difficulty + endless HP scaling
+			var hp_scale := endless_scale
+			if diff == "easy":   hp_scale *= 0.75
+			elif diff == "hard": hp_scale *= 1.25
+			if hp_scale != 1.0:
+				u.hp = maxi(1, int(float(u.hp) * hp_scale))
+				u.hp_max = u.hp
 		_unit_flanks[u] = _rng.randf_range(-0.55, 0.55)
 
 func _wave_spawn_pos(edge: int) -> Vector3:
@@ -4167,7 +4198,15 @@ func _show_endgame(victory: bool) -> void:
 	var cp_held := 0
 	for cp in capture_points:
 		if cp.get("owner") == "player": cp_held += 1
-	if victory:
+	if _endless_mode:
+		# Endless: defeat-only with waves-survived as the score
+		title.text     = "SECTOR OVERRUN"
+		title.modulate = Color(1.0, 0.55, 0.10)
+		var reason: String = "HQ destroyed." if hq_hp <= 0 else "Last defender fell."
+		sub.text       = ("%s\nWaves survived: %d   Enemy KIA: %d   Defenders lost: %d\nCPs held: %d / %d   Supplies: %d   Time: %d:%02d"
+			% [reason, wave_num, kill_count, _units_lost,
+			   cp_held, capture_points.size(), supplies, elapsed_min, elapsed_s])
+	elif victory:
 		title.text     = "NEIGHBORHOOD DEFENDED!"
 		title.modulate = Color(0.3, 1.0, 0.43)
 		sub.text       = ("Waves repelled: %d / %d\nEnemy KIA: %d   Defenders lost: %d\nCPs held: %d / %d   Supplies: %d   Time: %d:%02d"
@@ -4506,8 +4545,11 @@ func _update_hud() -> void:
 	res_label.text = "SUPPLIES: %d  (+%d/s)" % [supplies, income_rate]
 	# Wave timer color coding
 	var t_left := maxi(0, int(wave_timer))
-	wave_label.text = "WAVE %d/%d  |  %ds" % [wave_num, _effective_wave_count(), t_left]
-	if wave_num >= _effective_wave_count():
+	if _endless_mode:
+		wave_label.text = "WAVE %d  |  %ds" % [wave_num, t_left]
+	else:
+		wave_label.text = "WAVE %d/%d  |  %ds" % [wave_num, _effective_wave_count(), t_left]
+	if not _endless_mode and wave_num >= _effective_wave_count():
 		wave_label.modulate = Color(1.0, 1.0, 1.0)
 	elif t_left < 8:
 		wave_label.modulate = Color(1.0, 0.28, 0.18)
