@@ -861,34 +861,41 @@ func _classify_building(sat_col: Color, osm_type: String) -> String:
 		"apartments","residential","block_of_flats":
 			return "CONCRETE_BLOCK"
 		"office","commercial","bank","hotel":
-			return "GLASS_TOWER"
+			# Only commit to glass if the satellite confirms a cool-bright facade;
+			# many offices are concrete. Residential area mis-tags land here too.
+			var br := (sat_col.r + sat_col.g + sat_col.b) / 3.0
+			return "GLASS_TOWER" if (br > 0.38 and (sat_col.r - sat_col.b) < -0.04) else "CONCRETE_BLOCK"
 		"industrial","warehouse","shed","garage","garages":
 			return "INDUSTRIAL"
 		"church","cathedral","chapel","mosque","synagogue":
 			return "STONE_HISTORIC"
+	# Satellite-only fallback (osm_type == "" or unrecognised tag).
+	# Top-down roof colours are misleading — light-grey asphalt shingles look exactly
+	# like glass facades to a naive brightness+warmth test. Be very conservative:
+	# glass towers require genuinely high brightness AND strong cool bias.
 	var r := sat_col.r; var g := sat_col.g; var b := sat_col.b
 	var brightness := (r + g + b) / 3.0
 	var warmth     := r - b
 	var saturation := maxf(maxf(r,g),b) - minf(minf(r,g),b)
-	if brightness > 0.28 and warmth < -0.02:     return "GLASS_TOWER"
-	if warmth > 0.07 and brightness < 0.25:      return "BRICK_ROW"
-	if warmth > 0.04 and brightness >= 0.22:     return "SUBURBAN_HOUSE"
-	if brightness < 0.16 and saturation < 0.06:  return "INDUSTRIAL"
-	if warmth > 0.02 and brightness > 0.18:      return "STONE_HISTORIC"
+	if brightness > 0.50 and warmth < -0.07 and saturation > 0.04: return "GLASS_TOWER"
+	if warmth > 0.08 and brightness < 0.26:     return "BRICK_ROW"
+	if warmth > 0.05 and brightness >= 0.20:    return "SUBURBAN_HOUSE"
+	if brightness < 0.14 and saturation < 0.05: return "INDUSTRIAL"
+	if warmth > 0.03 and brightness > 0.20:     return "STONE_HISTORIC"
 	return "CONCRETE_BLOCK"
 
 func _bld_wall_color(bld_type: String, sat_col: Color) -> Color:
-	# sat brightness drives subtle per-block variation; kept in a narrow range
-	# so the base hue always reads clearly even under direct sun
-	var sb := clampf((sat_col.r + sat_col.g + sat_col.b) / 3.0 * 2.0, 0.05, 0.70)
+	# sb drives subtle per-block variation. Clamp upper bound to 0.50 so PBR lighting
+	# can't blow light-coloured walls out to white under the afternoon sun.
+	var sb := clampf((sat_col.r + sat_col.g + sat_col.b) / 3.0 * 2.0, 0.05, 0.50)
 	match bld_type:
-		"BRICK_ROW":      return Color(0.58 + sb*0.10, 0.22 + sb*0.06, 0.12 + sb*0.04)  # warm terracotta
-		"CONCRETE_BLOCK": return Color(0.36 + sb*0.10, 0.37 + sb*0.10, 0.42 + sb*0.10)  # cool grey-blue
-		"GLASS_TOWER":    return Color(0.22 + sb*0.08, 0.34 + sb*0.12, 0.54 + sb*0.14)  # steel blue
-		"SUBURBAN_HOUSE": return Color(0.68 + sb*0.10, 0.56 + sb*0.08, 0.40 + sb*0.07)  # warm cream
-		"INDUSTRIAL":     return Color(0.26 + sb*0.08, 0.25 + sb*0.08, 0.24 + sb*0.07)  # dark iron grey
-		"STONE_HISTORIC": return Color(0.50 + sb*0.10, 0.44 + sb*0.08, 0.30 + sb*0.06)  # sandy stone
-		_:                return Color(0.40 + sb*0.10, 0.39 + sb*0.10, 0.38 + sb*0.10)
+		"BRICK_ROW":      return Color(0.52 + sb*0.08, 0.18 + sb*0.05, 0.10 + sb*0.04)  # warm terracotta
+		"CONCRETE_BLOCK": return Color(0.26 + sb*0.10, 0.27 + sb*0.10, 0.32 + sb*0.10)  # mid grey-blue
+		"GLASS_TOWER":    return Color(0.20 + sb*0.08, 0.30 + sb*0.12, 0.50 + sb*0.14)  # steel blue
+		"SUBURBAN_HOUSE": return Color(0.56 + sb*0.10, 0.44 + sb*0.08, 0.30 + sb*0.07)  # warm adobe
+		"INDUSTRIAL":     return Color(0.22 + sb*0.07, 0.21 + sb*0.07, 0.20 + sb*0.06)  # dark iron grey
+		"STONE_HISTORIC": return Color(0.42 + sb*0.10, 0.36 + sb*0.08, 0.24 + sb*0.06)  # dark sandy stone
+		_:                return Color(0.30 + sb*0.10, 0.29 + sb*0.10, 0.28 + sb*0.10)  # neutral dark grey
 
 func _bld_roof_color(bld_type: String, sat_col: Color) -> Color:
 	var w := _bld_wall_color(bld_type, sat_col)
@@ -907,6 +914,10 @@ func _build_bld_brick_row(px: float, pz: float, sat_col: Color) -> void:
 	body.position = Vector3(px, h * 0.5, pz)
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(body)
+	# Terracotta cornice band — wider + lighter than the wall, gives the brick row building
+	# its characteristic top-of-wall overhang visible from the RTS camera angle.
+	var corn := _box(Vector3(bw + 0.14, 0.11, bd + 0.14), _mat(wall_col.lightened(0.14)))
+	corn.position = Vector3(px, h - 0.10, pz); add_child(corn)
 	var par := _box(Vector3(bw + 0.05, 0.22, bd + 0.05), _mat(roof_col))
 	par.position = Vector3(px, h + 0.11, pz); add_child(par)
 	var chim_w := 0.22 + _rng.randf() * 0.10
@@ -927,6 +938,12 @@ func _build_bld_concrete_block(px: float, pz: float, sat_col: Color) -> void:
 	body.position = Vector3(px, h * 0.5, pz)
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(body)
+	# Belt course at ~40% height breaks up the flat slab read
+	var belt := _box(Vector3(bw + 0.12, 0.10, bd + 0.12), _mat(wall_col.lightened(0.12)))
+	belt.position = Vector3(px, h * 0.40, pz); add_child(belt)
+	# Cornice overhang just below parapet
+	var corn := _box(Vector3(bw + 0.18, 0.12, bd + 0.18), _mat(wall_col.lightened(0.08)))
+	corn.position = Vector3(px, h - 0.12, pz); add_child(corn)
 	var par := _box(Vector3(bw + 0.06, 0.26, bd + 0.06), _mat(roof_col))
 	par.position = Vector3(px, h + 0.13, pz); add_child(par)
 	var rbox := _box(Vector3(0.38, 0.42, 0.28), _mat(roof_col.darkened(0.15)))
@@ -1092,13 +1109,19 @@ func _place_tree(px: float, pz: float) -> void:
 		var ox := (_rng.randf() - 0.5) * spread
 		var oz := (_rng.randf() - 0.5) * spread
 		var sx := 0.60 + _rng.randf() * 0.65
+		# Per-tree HSV jitter so the canopy reads as individual trees, not stamps.
+		# ±5° hue shift, ±8% saturation, ±15% value (lightness).
+		var hv := fmod(base_col.h + _rng.randf_range(-0.014, 0.014) + 1.0, 1.0)
+		var sv := clampf(base_col.s * _rng.randf_range(0.92, 1.08), 0.0, 1.0)
+		var vv := clampf(base_col.v * _rng.randf_range(0.85, 1.15), 0.02, 1.0)
+		var tree_col := Color.from_hsv(hv, sv, vv)
 		match tree_type:
-			"CONIFER":  _build_tree_conifer(px+ox, pz+oz, sx, base_col)
-			"BIRCH":    _build_tree_birch(px+ox, pz+oz, sx, base_col)
-			"COLUMNAR": _build_tree_columnar(px+ox, pz+oz, sx, base_col)
-			"SHRUB":    _build_tree_shrub(px+ox, pz+oz, sx, base_col)
-			_:          _build_tree_deciduous(px+ox, pz+oz, sx, base_col)
-		_tree_lod_proxy(px+ox, pz+oz, sx, base_col, tree_type)
+			"CONIFER":  _build_tree_conifer(px+ox, pz+oz, sx, tree_col)
+			"BIRCH":    _build_tree_birch(px+ox, pz+oz, sx, tree_col)
+			"COLUMNAR": _build_tree_columnar(px+ox, pz+oz, sx, tree_col)
+			"SHRUB":    _build_tree_shrub(px+ox, pz+oz, sx, tree_col)
+			_:          _build_tree_deciduous(px+ox, pz+oz, sx, tree_col)
+		_tree_lod_proxy(px+ox, pz+oz, sx, tree_col, tree_type)
 
 # Single low-poly sphere standing in for a full tree beyond ~34 units.
 # Cross-fades with the full-detail geometry over the 34–38 u overlap range.
