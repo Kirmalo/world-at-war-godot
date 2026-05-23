@@ -1087,18 +1087,41 @@ func _place_tree(px: float, pz: float) -> void:
 			"COLUMNAR": _build_tree_columnar(px+ox, pz+oz, sx, base_col)
 			"SHRUB":    _build_tree_shrub(px+ox, pz+oz, sx, base_col)
 			_:          _build_tree_deciduous(px+ox, pz+oz, sx, base_col)
+		_tree_lod_proxy(px+ox, pz+oz, sx, base_col, tree_type)
+
+# Single low-poly sphere standing in for a full tree beyond ~34 units.
+# Cross-fades with the full-detail geometry over the 34–38 u overlap range.
+func _tree_lod_proxy(rx: float, rz: float, sx: float, col: Color, tree_type: String) -> void:
+	var cr    := 0.58 * sx        # approximate mean crown radius
+	var py    := 1.20 * sx        # approximate crown-centre height
+	var sm := SphereMesh.new()
+	sm.radius = cr; sm.height = cr * 1.5
+	sm.radial_segments = 4; sm.rings = 3
+	var mi := MeshInstance3D.new()
+	mi.mesh = _mesh_with_color(sm, col)
+	mi.set_surface_override_material(0, _get_tree_mat(tree_type if tree_type != "SHRUB" else "DECIDUOUS"))
+	mi.position = Vector3(rx, py, rz)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	mi.visibility_range_begin        = 34.0
+	mi.visibility_range_begin_margin = 4.0
+	mi.visibility_range_fade_mode    = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	add_child(mi)
 
 func _trunk(rx: float, rz: float, trunk_h: float, top_r: float, bot_r: float, col: Color) -> void:
 	var tm := CylinderMesh.new()
-	tm.top_radius = top_r; tm.bottom_radius = bot_r; tm.height = trunk_h; tm.radial_segments = 6
+	tm.top_radius = top_r; tm.bottom_radius = bot_r; tm.height = trunk_h; tm.radial_segments = 5
 	var t := MeshInstance3D.new(); t.mesh = tm
 	t.set_surface_override_material(0, _mat(col))
 	t.position = Vector3(rx, trunk_h * 0.5, rz)
 	t.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	# Fade out trunks beyond 38 u — at that range they are sub-pixel from the RTS camera
+	t.visibility_range_end        = 38.0
+	t.visibility_range_end_margin = 4.0
+	t.visibility_range_fade_mode  = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	add_child(t)
 
 func _crown_sphere(rx: float, ry: float, rz: float, radius: float, height_r: float,
-		col: Color, tree_type: String, segs: int = 16, rings: int = 10) -> void:
+		col: Color, tree_type: String, segs: int = 8, rings: int = 6) -> void:
 	var sm := SphereMesh.new(); sm.radius = radius; sm.height = radius * height_r
 	sm.radial_segments = segs; sm.rings = rings
 	var mi := MeshInstance3D.new()
@@ -1106,6 +1129,10 @@ func _crown_sphere(rx: float, ry: float, rz: float, radius: float, height_r: flo
 	mi.set_surface_override_material(0, _get_tree_mat(tree_type))
 	mi.position = Vector3(rx, ry, rz)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	# Fade out full-detail crowns beyond 38 u; LOD proxy picks up from 34 u
+	mi.visibility_range_end        = 38.0
+	mi.visibility_range_end_margin = 4.0
+	mi.visibility_range_fade_mode  = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	add_child(mi)
 
 func _build_tree_deciduous(rx: float, rz: float, sx: float, col: Color) -> void:
@@ -1135,7 +1162,7 @@ func _build_tree_conifer(rx: float, rz: float, sx: float, col: Color) -> void:
 		var base_r := (0.55 - t_frac * 0.36) * sx
 		var h      := (0.52 + _rng.randf() * 0.14) * sx
 		var cm := CylinderMesh.new()
-		cm.top_radius = 0.015; cm.bottom_radius = base_r; cm.height = h; cm.radial_segments = 7
+		cm.top_radius = 0.015; cm.bottom_radius = base_r; cm.height = h; cm.radial_segments = 5
 		var dark := clampf(0.82 + _rng.randf() * 0.22, 0.0, 1.0)
 		var tc := Color(col.r*dark, col.g*dark, col.b*dark)
 		var mi := MeshInstance3D.new()
@@ -1143,6 +1170,9 @@ func _build_tree_conifer(rx: float, rz: float, sx: float, col: Color) -> void:
 		mi.set_surface_override_material(0, _get_tree_mat("CONIFER"))
 		mi.position = Vector3(rx, tier_y + h*0.5, rz)
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		mi.visibility_range_end        = 38.0
+		mi.visibility_range_end_margin = 4.0
+		mi.visibility_range_fade_mode  = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 		add_child(mi)
 		tier_y += h * 0.52  # next tier overlaps slightly
 
