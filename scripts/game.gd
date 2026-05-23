@@ -897,11 +897,13 @@ func _bld_wall_color(bld_type: String, sat_col: Color) -> Color:
 		_:                return Color(0.30 + sb*0.10, 0.29 + sb*0.10, 0.28 + sb*0.10)  # neutral dark grey
 
 ## Per-building HSV jitter — unique shade per building within its type palette.
-## hue ±8°, saturation ×0.75-1.25, value ×0.80-1.05 biased darker to prevent white-out.
+## hue ±8°, saturation ×0.85-1.15, value ×0.90-1.08.
+## Narrow value range: base colours are already dark; even ×0.80 pushes
+## low-V buildings (concrete, industrial) to near-black under PBR lighting.
 func _jitter_bld_color(col: Color) -> Color:
 	var hv := fmod(col.h + _rng.randf_range(-0.022, 0.022) + 1.0, 1.0)
-	var sv := clampf(col.s * _rng.randf_range(0.75, 1.25), 0.0, 1.0)
-	var vv := clampf(col.v * _rng.randf_range(0.80, 1.05), 0.02, 0.88)
+	var sv := clampf(col.s * _rng.randf_range(0.85, 1.15), 0.0, 1.0)
+	var vv := clampf(col.v * _rng.randf_range(0.90, 1.08), 0.18, 0.88)
 	return Color.from_hsv(hv, sv, vv)
 
 func _bld_roof_color(bld_type: String, sat_col: Color) -> Color:
@@ -1120,11 +1122,13 @@ func _place_tree(px: float, pz: float) -> void:
 	var base_col  := _tree_base_color(tree_type, sat_col)
 	# Type-specific count and spread
 	var count := 2 + _rng.randi() % 3
-	var spread := TCELL * (0.70 if tree_type in ["BIRCH","CONIFER"] else 0.85)
+	var spread := TCELL * (0.60 if tree_type in ["BIRCH","CONIFER"] else 0.72)
 	for _i in count:
 		var ox := (_rng.randf() - 0.5) * spread
 		var oz := (_rng.randf() - 0.5) * spread
-		var sx := 0.60 + _rng.randf() * 0.65
+		# sx=0.38-0.80: crown radius tops out at ~0.70 units = ~3.5m — proportionate
+		# to 1.44-unit building width at RTS camera distances.
+		var sx := 0.38 + _rng.randf() * 0.42
 		# Per-tree HSV jitter so the canopy reads as individual trees, not stamps.
 		# ±5° hue shift, ±8% saturation, ±15% value (lightness).
 		var hv := fmod(base_col.h + _rng.randf_range(-0.014, 0.014) + 1.0, 1.0)
