@@ -745,14 +745,24 @@ func _build_osm_buildings() -> void:
 			all_idx.append_array([b, b+2, b+1, b+1, b+2, b+3])
 
 		var rb := all_verts.size()
+		var roof_pts := PackedVector2Array()
 		for i in pts.size():
 			var pi := pts[i] as Vector2
 			all_verts.append(Vector3(pi.x, h, pi.y))
 			all_normals.append(Vector3.UP)
 			all_colors.append(roof_col)
 			all_uvs.append(Vector2(pi.x, pi.y))
-		for i in range(1, pts.size() - 1):
-			all_idx.append_array([rb, rb + i, rb + i + 1])
+			roof_pts.append(pi)
+		# Use proper polygon triangulation so concave / L-shaped / T-shaped footprints
+		# don't produce overlapping triangles at y=h that Z-fight each other.
+		var tri_idxs := Geometry2D.triangulate_polygon(roof_pts)
+		if tri_idxs.is_empty():
+			# Fallback: fan from vertex 0 (only correct for convex polygons)
+			for i in range(1, pts.size() - 1):
+				all_idx.append_array([rb, rb + i, rb + i + 1])
+		else:
+			for t in range(0, tri_idxs.size(), 3):
+				all_idx.append_array([rb + tri_idxs[t], rb + tri_idxs[t + 1], rb + tri_idxs[t + 2]])
 
 	if all_verts.is_empty(): return
 
