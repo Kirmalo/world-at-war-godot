@@ -3178,6 +3178,9 @@ func _fire(shooter: Unit, target: Unit) -> void:
 			if ou == null or ou == target or ou.hp <= 0 or ou.team == shooter.team: continue
 			if ou.global_position.distance_to(target.global_position) <= 2.2:
 				ou.take_damage(splash_dmg)
+				if ou.hp <= 0:
+					shooter.vet_kills += 1
+					_refresh_vet_stars(shooter)
 
 func _flash_hit(u: Unit) -> void:
 	# Brief white-orange emission pulse on all MeshInstances inside the unit body
@@ -4607,7 +4610,10 @@ func _update_unit_info() -> void:
 	elif sel_units.size() == 1 and sel_unit != null:
 		unit_info.visible = true
 		var def: Dictionary = UNIT_DEFS[sel_unit.kind]
-		unit_name_lbl.text = "%s  HP %d/%d" % [def.name, sel_unit.hp, sel_unit.hp_max]
+		var vet_tiers := mini(sel_unit.vet_kills / 5, 3)
+		var rank_sfx  := (["", "  ★", "  ★★", "  ★★★"] as Array)[vet_tiers] as String
+		unit_name_lbl.text = "%s%s  HP %d/%d" % [def.name, rank_sfx, sel_unit.hp, sel_unit.hp_max]
+		_refresh_vet_stars(sel_unit)   # ensure billboard star label is created/synced
 	else:
 		unit_info.visible = true
 		unit_name_lbl.text = "%d UNITS SELECTED" % sel_units.size()
