@@ -3654,8 +3654,9 @@ func _spawn_muzzle(from: Vector3, to: Vector3) -> void:
 	# Tracer line — cached material, size differs per shot so BoxMesh is still per-shot
 	var mid := (from + to) * 0.5; var len: float = from.distance_to(to)
 	var tracer := _box(Vector3(0.022, 0.022, len), _mat_tracer)
-	tracer.position = mid
-	tracer.look_at(to, Vector3.UP)
+	# look_at_from_position sets position AND orientation without requiring tree membership
+	var up := Vector3.UP if absf(to.normalized().dot(Vector3.UP)) < 0.99 else Vector3.FORWARD
+	tracer.look_at_from_position(mid, to, up)
 	add_child(tracer)
 	get_tree().create_timer(0.05).timeout.connect(func()->void: if is_instance_valid(tracer): tracer.queue_free())
 
