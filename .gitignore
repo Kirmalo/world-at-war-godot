@@ -1,3 +1,8 @@
 .godot/
 *.uid
 scripts/secrets.gd
+
+# Android / export artifacts
+build/
+*.apk
+*.aab
